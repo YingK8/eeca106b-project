@@ -168,6 +168,8 @@ class LinearTrajectory(Trajectory):
         self.acceleration = (self.distance * 4.0) / (self.total_time ** 2)  # keep constant magnitude acceleration
         self.v_max = (self.total_time / 2.0) * self.acceleration  # maximum velocity magnitude
         self.desired_orientation = np.array([0, 1, 0, 0])
+        self.t_half = self.total_time / 2.0
+
 
     def target_pose(self, time):
         """
@@ -192,12 +194,27 @@ class LinearTrajectory(Trajectory):
         if time <= self.total_time / 2.0:
             # TODO: calculate the position of the end effector at time t,
             # For the first half of the trajectory, maintain a constant acceleration
-            pos = ...
+            pos = (
+                self.start_position
+                + 0.5 * self.acceleration * time**2 
+            )
         else:
             # TODO: Calculate the position of the end effector at time t,
             # For the second half of the trajectory, maintain a constant acceleration
             # Hint: Calculate the remaining distance to the goal position.
-            pos = ...
+            pos_mid = (
+                self.start_position
+                + 0.5 * self.acceleration * self.t_half**2 
+            )
+            t_remain = time - self.t_half
+
+            d_pos = (
+                self.v_max * t_remain
+                - 0.5 * self.acceleration * t_remain**2
+            )
+
+            pos = pos_mid + d_pos
+
         return np.hstack((pos, self.desired_orientation))
 
     def target_velocity(self, time):
@@ -218,14 +235,14 @@ class LinearTrajectory(Trajectory):
             # TODO: calculate velocity using the acceleration and time
             # For the first half of the trajectory, we maintain a constant acceleration
 
-
-            linear_vel = ...
+            linear_vel = self.acceleration * time
         else:
             # TODO: start slowing the velocity down from the maximum one
             # For the second half of the trajectory, maintain a constant deceleration
-
-
-            linear_vel = ...
+            linear_vel = (
+                self.v_max
+                - self.acceleration * (time - self.t_half)
+            ) 
         return np.hstack((linear_vel, np.zeros(3)))
 
 
@@ -253,6 +270,7 @@ class CircularTrajectory(Trajectory):
         self.angular_acceleration = (2 * np.pi * 4.0) / (self.total_time ** 2)  # keep constant magnitude acceleration
         self.angular_v_max = (self.total_time / 2.0) * self.angular_acceleration  # maximum velocity magnitude
         self.desired_orientation = np.array([0, 1, 0, 0])
+        self.t_half = self.total_time / 2.0
 
     def target_pose(self, time):
         """
@@ -279,14 +297,29 @@ class CircularTrajectory(Trajectory):
             # For the first half of the trajectory, maintain a constant acceleration
 
 
-            theta = ...
+            theta = 0.5 * self.angular_acceleration * time**2
         else:
             # TODO: Calculate the ANGLE of the end effector at time t,
             # For the second half of the trajectory, maintain a constant acceleration
             # Hint: Calculate the remaining angle to the goal position.
 
 
-            theta = ...
+            theta_mid = (
+                
+                0.5 * self.angular_acceleration * self.t_half**2 
+            )
+
+            t_remain = time - self.t_half
+
+            d_theta = (
+                self.angular_v_max * t_remain
+                - 0.5 * self.angular_acceleration * t_remain**2
+            )
+
+            theta = theta_mid + d_theta
+
+
+        
         pos_d = np.ndarray.flatten(self.center_position + self.radius * np.array([np.cos(theta), np.sin(theta), 0]))
         return np.hstack((pos_d, self.desired_orientation))
 
@@ -309,15 +342,29 @@ class CircularTrajectory(Trajectory):
             # For the first half of the trajectory, we maintain a constant acceleration
 
 
-            theta = ...
-            theta_dot = ...
+            theta = 0.5 * self.angular_acceleration*time**2
+            theta_dot = self.angular_acceleration*time
         else:
             # TODO: start slowing the ANGULAR velocity down from the maximum one
             # For the second half of the trajectory, maintain a constant deceleration
 
+            theta_mid = (
+                
+                0.5 * self.angular_acceleration * self.t_half**2 
+            )
 
-            theta = ...
-            theta_dot = ...
+            t_remain = time - self.t_half
+
+            d_theta = (
+                self.angular_v_max * t_remain
+                - 0.5 * self.angular_acceleration * t_remain**2
+            )
+
+            theta = theta_mid + d_theta
+
+            theta_dot_mid = self.angular_acceleration*self.t_half
+            theta_dot = theta_dot_mid - self.angular_acceleration * (time - self.t_half)
+            
         vel_d = np.ndarray.flatten(self.radius * theta_dot * np.array([-np.sin(theta), np.cos(theta), 0]))
         return np.hstack((vel_d, np.zeros(3)))
 

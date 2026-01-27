@@ -51,9 +51,9 @@ class VisualServo(Node):
 
             # PID gains tuned for UR7e (Use these as a start)
 
-            Kp = 0.2 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
-            Kd = 0.01 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
-            Ki = 0.01 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
+            Kp = 0.3 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
+            Kd = 0.005 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
+            Ki = 0.02 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
 
             self.velocity_controller = PIDJointVelocityController(self, Kp, Ki, Kd)
 
@@ -391,7 +391,7 @@ class VisualServo(Node):
 
     def _execute_joint_trajectory(self, joint_traj):
         """Execute trajectory using the selected controller"""
-        if self.controller_type == 'trajectory':
+        if self.controller_type == 'default':
             success = self.trajectory_controller.execute_joint_trajectory(joint_traj)
             if not success:
                 self.get_logger().error('Trajectory execution failed')

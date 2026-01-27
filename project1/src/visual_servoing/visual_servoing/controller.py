@@ -145,6 +145,10 @@ class PIDJointVelocityController(Controller):
         """
         super().__init__(node)
         # TODO: Add your code here! 
+        self.Kp = np.diag(Kp)
+        self.Ki = np.diag(Ki)
+        self.Kd = np.diag(Kd)
+        self.integral_err = np.zeros(6, dtype=float)
 
         self.node.get_logger().info("Initialized PID Joint Velocity Controller")
 
@@ -177,9 +181,15 @@ class PIDJointVelocityController(Controller):
             Commanded joint velocities
         """
 
-        # TODO: Add your code here! 
+        # TODO: Add your code here!
+        position_error = target_position - current_position
+        velocity_error = target_velocity - current_velocity
 
-        return np.array(6)
+        u = target_velocity + (self.Kp @ position_error) + (self.Ki @ self.integral_err) + (self.Kd @ velocity_error)
+
+        self.integral_err += position_error
+
+        return u
 
     def get_name(self):
         """Returns the name of this controller"""
