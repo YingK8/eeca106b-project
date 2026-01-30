@@ -149,6 +149,7 @@ class PIDJointVelocityController(Controller):
         self.Ki = np.diag(Ki)
         self.Kd = np.diag(Kd)
         self.integral_err = np.zeros(6, dtype=float)
+        self.prev_time = self.node.get_clock().now()
 
         self.node.get_logger().info("Initialized PID Joint Velocity Controller")
 
@@ -185,9 +186,13 @@ class PIDJointVelocityController(Controller):
         position_error = target_position - current_position
         velocity_error = target_velocity - current_velocity
 
-        u = target_velocity + (self.Kp @ position_error) + (self.Ki @ self.integral_err) + (self.Kd @ velocity_error)
+        curr_time = self.node.get_clock().now()
+        dt = (curr_time - self.prev_time).nanoseconds * 1e-9 # convert nanoseconds to seconds
+        self.prev_time = curr_time
 
-        self.integral_err += position_error
+        self.integral_err += position_error * dt
+
+        u = target_velocity + (self.Kp @ position_error) + (self.Ki @ self.integral_err) + (self.Kd @ velocity_error)
 
         return u
 
