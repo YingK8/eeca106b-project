@@ -320,7 +320,7 @@ class CircularTrajectory(Trajectory):
 
 
         
-        pos_d = np.ndarray.flatten(self.center_position + self.radius * np.array([np.cos(theta), np.sin(theta), 0]))
+        pos_d = (self.center_position + self.radius * np.array([np.cos(theta), np.sin(theta), 0])).flatten()
         return np.hstack((pos_d, self.desired_orientation))
 
     def target_velocity(self, time):
@@ -365,7 +365,7 @@ class CircularTrajectory(Trajectory):
             theta_dot_mid = self.angular_acceleration*self.t_half
             theta_dot = theta_dot_mid - self.angular_acceleration * (time - self.t_half)
             
-        vel_d = np.ndarray.flatten(self.radius * theta_dot * np.array([-np.sin(theta), np.cos(theta), 0]))
+        vel_d = (self.radius * theta_dot * np.array([-np.sin(theta), np.cos(theta), 0])).flatten()
         return np.hstack((vel_d, np.zeros(3)))
 
 

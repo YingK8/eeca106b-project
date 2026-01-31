@@ -7,6 +7,7 @@ Author: Daniel Municio, Spring 2026
 import rclpy
 from rclpy.node import Node
 import numpy as np
+import subprocess
 from tf2_ros import TransformListener, Buffer
 from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import PoseStamped
@@ -51,9 +52,9 @@ class VisualServo(Node):
 
             # PID gains tuned for UR7e (Use these as a start)
 
-            Kp = 0.3 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
-            Kd = 0.005 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
-            Ki = 0.02 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
+            Kp = 1.5 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
+            Kd = 4 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
+            Ki = 1 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
 
             self.velocity_controller = PIDJointVelocityController(self, Kp, Ki, Kd)
 
@@ -209,6 +210,32 @@ class VisualServo(Node):
 
         return trajectory
 
+    def _switch_to_scaled_controller(self):
+        """Activate the scaled_joint_trajectory_controller (default trajectory controller)."""
+        try:
+            cmd = [
+                'ros2', 'control', 'switch_controllers',
+                '--deactivate', 'forward_velocity_controller',
+                '--activate', 'scaled_joint_trajectory_controller'
+            ]
+            subprocess.run(cmd, check=True)
+            self.get_logger().info('Switched to scaled_joint_trajectory_controller')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to switch to scaled controller: {e}')
+
+    def _switch_to_forward_controller(self):
+        """Activate the forward_velocity_controller (used by PID velocity controller)."""
+        try:
+            cmd = [
+                'ros2', 'control', 'switch_controllers',
+                '--activate', 'forward_velocity_controller',
+                '--deactivate', 'scaled_joint_trajectory_controller'
+            ]
+            subprocess.run(cmd, check=True)
+            self.get_logger().info('Switched to forward_velocity_controller')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to switch to forward controller: {e}')
+
 
 
     def publish_trajectory_visualization(self):
@@ -345,9 +372,15 @@ class VisualServo(Node):
 
         # Move to start position first to avoid tolerance violations
         self.get_logger().info("Moving to trajectory start position...")
+        # If drawing a circle with PID control, ensure the robot uses
+        # the default scaled_joint_trajectory_controller to move to the start
+        if self.args.task == 'circle' and self.controller_type == 'pid':
+            self.get_logger().info('Activating scaled (default) controller before move to start')
+            self._switch_to_scaled_controller()
         self._move_to_start(joint_traj.points[0].positions)
 
         self._execute_joint_trajectory(joint_traj)
+        self._switch_to_scaled_controller()
 
     def _move_to_start(self, start_positions):
         """
@@ -416,6 +449,11 @@ class VisualServo(Node):
         self._control_iteration = 0
         self._control_start_time = self.get_clock().now()
         self._control_done = False
+
+        # If using PID velocity control, switch to forward velocity controller
+        if self.controller_type != 'default':
+            self.get_logger().info('Switching to forward velocity controller for PID execution')
+            self._switch_to_forward_controller()
 
         # Create velocity command publisher
         self._velocity_pub = self.create_publisher(Float64MultiArray, '/forward_velocity_controller/commands', 10)
