@@ -52,7 +52,7 @@ class VisualServo(Node):
 
             # PID gains tuned for UR7e (Use these as a start)
 
-            Kp = 1.5 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
+            Kp = 2 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
             Kd = 4 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
             Ki = 1 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
 

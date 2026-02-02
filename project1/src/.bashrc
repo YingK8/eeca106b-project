@@ -37,5 +37,5 @@ default_tuck () {
 
 alias fc="ros2 control switch_controllers --activate forward_velocity_controller --deactivate scaled_joint_trajectory_control"
 
-echo "SUCCESS.. BONK!"
+echo "SUCCESS.. BOINK!"
 
