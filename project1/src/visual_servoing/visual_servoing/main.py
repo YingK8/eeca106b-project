@@ -20,6 +20,17 @@ import argparse
 import sys
 import select
 import time
+import subprocess
+try:
+    import matplotlib
+    # requires python3-tk for Ubuntu
+    matplotlib.use('TkAgg')
+    import matplotlib.pyplot as plt
+except (ImportError, RuntimeError):
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        plt = None
 
 from .trajectories import LinearTrajectory, CircularTrajectory
 from .controller import UR7eTrajectoryController, PIDJointVelocityController
@@ -46,10 +57,10 @@ class VisualServo(Node):
             self.get_logger().info('Waiting for /compute_ik service...')
 
         self.controller_type = args.controller
-        if self.controller_type == 'default':
-            self.trajectory_controller = UR7eTrajectoryController(self)
-        elif self.controller_type == 'pid':
+        # Always create trajectory controller for moving to start position
+        self.trajectory_controller = UR7eTrajectoryController(self)
 
+        if self.controller_type == 'pid':
             # PID gains tuned for UR7e (Use these as a start)
 
             Kp = 1.5 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
@@ -68,6 +79,16 @@ class VisualServo(Node):
         self.get_logger().info(f"Task: {args.task}")
         self.get_logger().info(f"AR Marker ID: {args.ar_marker}")
         self.get_logger().info(f"Controller: {args.controller}")
+        self.get_logger().info(f"Log: {args.log}")
+
+        # Logging variables
+        self.log_enabled = args.log
+        if self.log_enabled:
+            self.log_times = []
+            self.log_actual_positions = []
+            self.log_actual_velocities = []
+            self.log_target_positions = []
+            self.log_target_velocities = []
 
     def joint_state_callback(self, msg):
         """Store current joint state"""
@@ -379,6 +400,9 @@ class VisualServo(Node):
             self._switch_to_scaled_controller()
         self._move_to_start(joint_traj.points[0].positions)
 
+        # Switch to the appropriate ROS2 controller after moving to start
+        switch_controllers(self.controller_type)
+
         self._execute_joint_trajectory(joint_traj)
         self._switch_to_scaled_controller()
 
@@ -450,11 +474,6 @@ class VisualServo(Node):
         self._control_start_time = self.get_clock().now()
         self._control_done = False
 
-        # If using PID velocity control, switch to forward velocity controller
-        if self.controller_type != 'default':
-            self.get_logger().info('Switching to forward velocity controller for PID execution')
-            self._switch_to_forward_controller()
-
         # Create velocity command publisher
         self._velocity_pub = self.create_publisher(Float64MultiArray, '/forward_velocity_controller/commands', 10)
 
@@ -481,6 +500,15 @@ class VisualServo(Node):
         self._control_timer.cancel()
 
         self.get_logger().info('Velocity control execution complete!')
+
+        if self.log_enabled:
+            self.plot_results(
+                self.log_times,
+                self.log_actual_positions,
+                self.log_actual_velocities,
+                self.log_target_positions,
+                self.log_target_velocities
+            )
 
     def _velocity_control_callback(self):
         """Timer callback for velocity control at 10 Hz"""
@@ -520,6 +548,14 @@ class VisualServo(Node):
         target_position, target_velocity, self._control_current_index = self._interpolate_trajectory(
             self._control_joint_traj, elapsed, self._control_current_index
         )
+
+        # Log data if enabled
+        if self.log_enabled:
+            self.log_times.append(elapsed)
+            self.log_actual_positions.append(current_position)
+            self.log_actual_velocities.append(current_velocity)
+            self.log_target_positions.append(target_position)
+            self.log_target_velocities.append(target_velocity)
 
         # Compute control command
         commanded_velocity = self.velocity_controller.step_control(
@@ -595,6 +631,63 @@ class VisualServo(Node):
 
         return target_position, target_velocity, current_index
 
+    def plot_results(
+        self,
+        times,
+        actual_positions,
+        actual_velocities,
+        target_positions,
+        target_velocities
+    ):
+        """
+        Plots results.
+        """
+        if plt is None:
+            self.get_logger().error("Matplotlib not found, skipping plot.")
+            return
+
+        # Make everything an ndarray
+        times = np.array(times)
+        actual_positions = np.array(actual_positions)
+        actual_velocities = np.array(actual_velocities)
+        target_positions = np.array(target_positions)
+        target_velocities = np.array(target_velocities)
+
+        joint_names = [
+            'shoulder_pan', 'shoulder_lift', 'elbow',
+            'wrist_1', 'wrist_2', 'wrist_3'
+        ]
+
+        # Plot joint space
+        plt.figure(figsize=(12, 16))
+        joint_num = len(joint_names)
+        for i, joint_name in enumerate(joint_names):
+            # Position
+            plt.subplot(joint_num, 2, 2*i + 1)
+            plt.plot(times, actual_positions[:, i], label='Actual')
+            plt.plot(times, target_positions[:, i], label='Desired', linestyle='--')
+            plt.ylabel(f"{joint_name} Pos (rad)")
+            if i == 0:
+                plt.title("Joint Position Tracking")
+            if i == joint_num - 1:
+                plt.xlabel("Time (s)")
+            plt.legend(loc='upper right', fontsize='small')
+
+            # Velocity
+            plt.subplot(joint_num, 2, 2*i + 2)
+            plt.plot(times, actual_velocities[:, i], label='Actual')
+            plt.plot(times, target_velocities[:, i], label='Desired', linestyle='--')
+            plt.ylabel(f"{joint_name} Vel (rad/s)")
+            if i == 0:
+                plt.title("Joint Velocity Tracking")
+            if i == joint_num - 1:
+                plt.xlabel("Time (s)")
+            plt.legend(loc='upper right', fontsize='small')
+
+        plt.tight_layout()
+        print("Close the plot window to continue")
+        plt.show()
+
     def run(self):
         self.trajectory = self.create_trajectory()
 
@@ -616,6 +709,41 @@ class VisualServo(Node):
         self.get_logger().info("=== Execution Complete ===")
 
 
+def switch_controllers(controller_type):
+    """
+    Switch ROS2 controllers based on the selected controller type.
+
+    Parameters
+    ----------
+    controller_type : str
+        Either 'default' or 'pid'
+    """
+    if controller_type == 'default':
+        cmd = [
+            'ros2', 'control', 'switch_controllers',
+            '--deactivate', 'forward_velocity_controller',
+            '--activate', 'scaled_joint_trajectory_controller'
+        ]
+    else:  # pid
+        cmd = [
+            'ros2', 'control', 'switch_controllers',
+            '--deactivate', 'scaled_joint_trajectory_controller',
+            '--activate', 'forward_velocity_controller'
+        ]
+
+    print(f"Switching controllers for '{controller_type}' mode...")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            print("Switching controllers successful")
+        else:
+            print(f"Controller switch warning: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        print("Controller switch timed out")
+    except Exception as e:
+        print(f"Controller switch failed: {e}")
+
+
 def main(args=None):
     parser = argparse.ArgumentParser(description='Bonk')
     parser.add_argument('--task', '-t', type=str, default='line',
@@ -630,17 +758,21 @@ def main(args=None):
     parser.add_argument('--controller', '-c', type=str, default='default',
                        choices=['default', 'pid'],
                        help='Controller type: trajectory (default), pid')
+    parser.add_argument('--log', action='store_true', help='plots controller performance')
 
     parsed_args = parser.parse_args()
 
     rclpy.init(args=args)
     node = VisualServo(parsed_args)
-
+   
     try:
         node.run()
     except KeyboardInterrupt:
         node.get_logger().info("Interrupted by user")
     finally:
+        # Switch back to default controller on cleanup
+        print("Cleaning up: switching back to default controller...")
+        switch_controllers('default')
         node.destroy_node()
         rclpy.shutdown()
 
