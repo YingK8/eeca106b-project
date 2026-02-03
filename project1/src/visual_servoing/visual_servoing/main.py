@@ -63,9 +63,11 @@ class VisualServo(Node):
         if self.controller_type == 'pid':
             # PID gains tuned for UR7e (Use these as a start)
 
-            Kp = 2 * np.array([0.4, 2, 1.7, 1.5, 2, 2])
-            Kd = 4 * np.array([2, 1, 2, 0.5, 0.8, 0.8])
-            Ki = 1 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
+            # Change Kp's shoulder pan from 0.4 -> 1.5
+            Kp = 2 * np.array([1.5, 2, 1.7, 1.5, 2, 2])
+            # Change Kd's shoulder_pan from 2 -> 1.5
+            Kd = 0.1 * np.array([1.5, 1, 2, 0.5, 0.8, 0.8])
+            Ki = 0.02 * np.array([1.4, 1.4, 1.4, 1, 0.6, 0.6])
 
             self.velocity_controller = PIDJointVelocityController(self, Kp, Ki, Kd)
 
