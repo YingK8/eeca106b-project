@@ -167,7 +167,7 @@ class VisualServo(Node):
                 position_wrist_frame = np.array([translation.x, translation.y, translation.z])
                 return position_wrist_frame
 
-            except Exception as e:
+            except Exception:
                 self.get_logger().info(f"Waiting for AR tag {marker_id}... ({time.time() - start_time:.1f}s)")
                 rclpy.spin_once(self, timeout_sec=0.1)
 
@@ -232,6 +232,50 @@ class VisualServo(Node):
             return None
 
         return trajectory
+
+    def compute_vertical_offset_target(self, marker_id, vertical_offset=0.15):
+        """
+        Compute target end-effector pose to maintain vertical offset above AR marker.
+
+        Returns
+        -------
+        tuple or None
+            (target_position, target_orientation) where:
+            - target_position: np.ndarray (3,) - desired wrist position in base_link frame
+            - target_orientation: np.ndarray (4,) - desired quaternion [qx, qy, qz, qw]
+            Returns None if AR marker lookup fails
+        """
+        try:
+            target_frame = 'base_link'
+            source_frame = f'ar_marker_{marker_id}'
+
+            transform = self.tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                rclpy.time.Time()
+            )
+
+            translation = transform.transform.translation
+            ar_position = np.array([translation.x, translation.y, translation.z])
+
+            # Update most recent valid position
+            self._vs_last_valid_target = ar_position
+
+        except Exception:
+            if self._vs_last_valid_target is None:
+                self.get_logger().warn('AR marker lost and no previous position available')
+                return None
+
+            ar_position = self._vs_last_valid_target
+            self.get_logger().warn_throttle(1.0, f'AR marker not visible, using last known position: {ar_position}')
+
+        # target = marker + offset
+        target_position = ar_position + np.array([0, 0, vertical_offset])
+
+        # Fixed orientation: gripper pointing down
+        target_orientation = np.array([0.0, 1.0, 0.0, 0.0])
+
+        return target_position, target_orientation
 
     def _switch_to_scaled_controller(self):
         """Activate the scaled_joint_trajectory_controller (default trajectory controller)."""
@@ -583,6 +627,111 @@ class VisualServo(Node):
 
         self._control_iteration += 1
 
+    def _visual_servo_callback(self):
+        """
+        Timer callback for visual servoing control at 10 Hz.
+
+        This callback:
+        1. Reads current AR marker position and computes target pose
+        2. Computes IK for target pose
+        3. Uses PID controller to track target joint positions
+        """
+        elapsed = (self.get_clock().now() - self._vs_start_time).nanoseconds / 1e9
+
+        # current joint state
+        if self.current_joint_state is None:
+            self.get_logger().warn('No joint state available, waiting...')
+            return
+
+        # Reorder current joint state to match standard order
+        current_joint_dict = {}
+        for i, name in enumerate(self.current_joint_state.name):
+            if i < 6:
+                current_joint_dict[name] = (
+                    self.current_joint_state.position[i],
+                    self.current_joint_state.velocity[i]
+                )
+
+        current_position = np.array([
+            current_joint_dict['shoulder_pan_joint'][0],
+            current_joint_dict['shoulder_lift_joint'][0],
+            current_joint_dict['elbow_joint'][0],
+            current_joint_dict['wrist_1_joint'][0],
+            current_joint_dict['wrist_2_joint'][0],
+            current_joint_dict['wrist_3_joint'][0]
+        ])
+        current_velocity = np.array([
+            current_joint_dict['shoulder_pan_joint'][1],
+            current_joint_dict['shoulder_lift_joint'][1],
+            current_joint_dict['elbow_joint'][1],
+            current_joint_dict['wrist_1_joint'][1],
+            current_joint_dict['wrist_2_joint'][1],
+            current_joint_dict['wrist_3_joint'][1]
+        ])
+
+        # Compute target pose from AR marker position
+        target_result = self.compute_vertical_offset_target(
+            self.args.ar_marker,
+            vertical_offset=0.15
+        )
+
+        if target_result is None:
+            self.get_logger().error('Failed to compute target pose, stopping')
+            self._vs_done = True
+            return
+
+        target_position_ee, target_orientation_ee = target_result
+
+        # Compute IK for target end-effector pose
+        x, y, z = target_position_ee
+        qx, qy, qz, qw = target_orientation_ee
+
+        joint_solution = self.compute_ik(x, y, z, qx, qy, qz, qw)
+
+        if joint_solution is None:
+            self.get_logger().warn('IK failed for current target, maintaining previous command')
+            # Don't update target, keep tracking last valid target
+            return
+
+        # Extract target joint positions from IK solution
+        ik_joint_dict = {}
+        for i, name in enumerate(joint_solution.name):
+            if i < 6:
+                ik_joint_dict[name] = joint_solution.position[i]
+
+        target_joint_position = np.array([
+            ik_joint_dict['shoulder_pan_joint'],
+            ik_joint_dict['shoulder_lift_joint'],
+            ik_joint_dict['elbow_joint'],
+            ik_joint_dict['wrist_1_joint'],
+            ik_joint_dict['wrist_2_joint'],
+            ik_joint_dict['wrist_3_joint']
+        ])
+
+        # Target velocity is zero (pure position control)
+        target_joint_velocity = np.zeros(6)
+
+        # # Log data if enabled
+        # if self.log_enabled:
+        #     self.log_times.append(elapsed)
+        #     self.log_actual_positions.append(current_position)
+        #     self.log_actual_velocities.append(current_velocity)
+        #     self.log_target_positions.append(target_joint_position)
+        #     self.log_target_velocities.append(target_joint_velocity)
+
+        # Compute control command using PID controller
+        commanded_velocity = self.velocity_controller.step_control(
+            target_joint_position,
+            target_joint_velocity,
+            current_position,
+            current_velocity
+        )
+
+        # Publish velocity command
+        vel_msg = Float64MultiArray()
+        vel_msg.data = commanded_velocity.tolist()
+        self._velocity_pub.publish(vel_msg)
+
     def _interpolate_trajectory(self, joint_traj, t, current_index=0):
         """
         Interpolate trajectory waypoints based on current time.
@@ -699,6 +848,21 @@ class VisualServo(Node):
         plt.show()
 
     def run(self):
+        # Check if visual servoing task
+        if self.args.task == 'visual_servo':
+            self.get_logger().info("=== Starting Visual Servoing Mode ===")
+            self.get_logger().info(f"Tracking AR marker {self.args.ar_marker}")
+            self.get_logger().info(f"Maintaining vertical offset: 0.15 meters above marker")
+            self.get_logger().info(f"Controller: {self.controller_type}")
+
+            if self.controller_type != 'pid':
+                self.get_logger().error("Visual servoing requires --controller pid")
+                return
+
+            self.execute_visual_servoing()
+            self.get_logger().info("=== Visual Servoing Complete ===")
+            return
+
         self.trajectory = self.create_trajectory()
 
         if self.trajectory is None:
@@ -717,6 +881,81 @@ class VisualServo(Node):
 
         self.execute_trajectory()
         self.get_logger().info("=== Execution Complete ===")
+
+    def execute_visual_servoing(self):
+        """
+        Execute real-time visual servoing to track AR marker with vertical offset.
+
+        This method sets up a control loop that:
+        1. Continuously reads AR marker position from TF
+        2. Computes target end-effector pose with vertical offset
+        3. Computes IK for target pose
+        4. Uses PID controller to track target joint positions
+        """
+        # Switch to forward velocity controller
+        self._switch_to_forward_controller()
+
+        self._vs_mode = True  # Flag to indicate visual servoing mode
+        self._vs_last_valid_target = None  # Last known valid AR marker position
+        self._vs_done = False  # Flag to stop control loop
+        self._vs_start_time = self.get_clock().now()
+
+        # Reset PID controller integral term
+        self.velocity_controller.integral_err = np.zeros(6)
+        self.velocity_controller.prev_time = self.get_clock().now()
+
+        # Reset logs
+        if self.log_enabled:
+            self.log_times = []
+            self.log_actual_positions = []
+            self.log_actual_velocities = []
+            self.log_target_positions = []
+            self.log_target_velocities = []
+
+        self._velocity_pub = self.create_publisher(
+            Float64MultiArray,
+            '/forward_velocity_controller/commands',
+            10
+        )
+
+        self.get_logger().info('Looking for AR marker to start visual servoing...')
+        ar_position = self.lookup_ar_tag(self.args.ar_marker, timeout=10.0)
+
+        if ar_position is None:
+            self.get_logger().error('Cannot start visual servoing: AR marker not found')
+            self._switch_to_scaled_controller()
+            return
+
+        self._vs_last_valid_target = ar_position
+        self.get_logger().info(f'AR marker found at {ar_position}')
+        self.get_logger().info('Starting visual servoing control loop at 10 Hz...')
+        self.get_logger().info('Press Ctrl+C to stop')
+
+        self._control_timer = self.create_timer(0.1, self._visual_servo_callback)
+
+        try:
+            while rclpy.ok() and not self._vs_done:
+                rclpy.spin_once(self, timeout_sec=0.1)
+        except KeyboardInterrupt:
+            self.get_logger().info('Visual servoing interrupted by user')
+
+        vel_msg = Float64MultiArray()
+        vel_msg.data = [0.0] * 6
+        self._velocity_pub.publish(vel_msg)
+
+        self._control_timer.cancel()
+        self._switch_to_scaled_controller()
+
+        self.get_logger().info('Visual servoing complete!')
+
+        if self.log_enabled:
+            self.plot_results(
+                self.log_times,
+                self.log_actual_positions,
+                self.log_actual_velocities,
+                self.log_target_positions,
+                self.log_target_velocities
+            )
 
 
 def switch_controllers(controller_type):
@@ -757,8 +996,8 @@ def switch_controllers(controller_type):
 def main(args=None):
     parser = argparse.ArgumentParser(description='Bonk')
     parser.add_argument('--task', '-t', type=str, default='line',
-                       choices=['line', 'circle'],
-                       help='Type of trajectory: line or circle')
+                       choices=['line', 'circle', 'visual_servo'],
+                       help='Type of trajectory: line, circle, or visual_servo')
     parser.add_argument('--ar_marker', type=int, default=0,
                        help='AR marker ID to track')
     parser.add_argument('--total_time', type=float, default=10.0,
