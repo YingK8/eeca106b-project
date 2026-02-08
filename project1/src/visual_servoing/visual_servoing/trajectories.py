@@ -285,7 +285,7 @@ class CircularTrajectory(Trajectory):
 
         Parameters
         ----------
-        time : float
+        time : floatLinearTrajector
 
         Returns
         -------

@@ -6,6 +6,7 @@ Author: Daniel Municio, Spring 2026
 
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
 import numpy as np
 import subprocess
 from tf2_ros import TransformListener, Buffer
@@ -47,11 +48,17 @@ class VisualServo(Node):
         self.trajectory = None
         self.trajectory_start_time = None
         self.current_joint_state = None
+        self.is_callback_running = False
+
+        self.hover_height = 0.5
+
+        # Use ReentrantCallbackGroup to prevent service call deadlocks
+        self.cb_group = ReentrantCallbackGroup()
 
         self.joint_state_sub = self.create_subscription(JointState, '/joint_states', self.joint_state_callback, 1)
 
-        # MoveIt IK client
-        self.ik_client = self.create_client(GetPositionIK, '/compute_ik')
+        # MoveIt IK client - put in Reentrant group so it doesn't block
+        self.ik_client = self.create_client(GetPositionIK, '/compute_ik', callback_group=self.cb_group)
         self.get_logger().info('Waiting for /compute_ik service...')
         while not self.ik_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for /compute_ik service...')
@@ -135,6 +142,9 @@ class VisualServo(Node):
         ik_req.ik_request.avoid_collisions = True
 
         future = self.ik_client.call_async(ik_req)
+        
+        # This function spins the node. If called from a callback, it causes deadlock.
+        # Ensure this is only called from the main thread loop.
         rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
@@ -187,7 +197,7 @@ class VisualServo(Node):
             self.get_logger().error(f"Bonk: Could not find AR tag {self.args.ar_marker}")
             return None
 
-        hover_height = 0.25  # meters above AR tag
+        hover_height = 0.75  # meters above AR tag
         goal_position = ar_position + np.array([0, 0, hover_height])
 
         if self.args.task == 'line':
@@ -233,7 +243,7 @@ class VisualServo(Node):
 
         return trajectory
 
-    def compute_vertical_offset_target(self, marker_id, vertical_offset=0.15):
+    def compute_vertical_offset_target(self, marker_id, vertical_offset=0.3):
         """
         Compute target end-effector pose to maintain vertical offset above AR marker.
 
@@ -267,7 +277,7 @@ class VisualServo(Node):
                 return None
 
             ar_position = self._vs_last_valid_target
-            self.get_logger().warn_throttle(1.0, f'AR marker not visible, using last known position: {ar_position}')
+            self.get_logger().warn(f'AR marker not visible, using last known position: {ar_position}')
 
         # target = marker + offset
         target_position = ar_position + np.array([0, 0, vertical_offset])
@@ -302,8 +312,6 @@ class VisualServo(Node):
             self.get_logger().info('Switched to forward_velocity_controller')
         except Exception as e:
             self.get_logger().warn(f'Failed to switch to forward controller: {e}')
-
-
 
     def publish_trajectory_visualization(self):
         """Publish trajectory as a Path for RViz visualization"""
@@ -358,6 +366,7 @@ class VisualServo(Node):
             return
 
         self.get_logger().info("Starting trajectory execution...")
+        self.is_callback_running = True
 
 
         num_waypoints = 20
@@ -375,42 +384,48 @@ class VisualServo(Node):
 
         self.get_logger().info(f"Computing IK for {num_waypoints} waypoints...")
 
-        for i, t in enumerate(times):
-            self.get_logger().info(f"  Computing waypoint {i+1}/{num_waypoints}...")
+        try:
+            for i, t in enumerate(times):
+                self.get_logger().info(f"  Computing waypoint {i+1}/{num_waypoints}...")
 
-            desired_pose = self.trajectory.target_pose(t)
+                desired_pose = self.trajectory.target_pose(t)
 
-            x, y, z = desired_pose[0:3]
-            qx, qy, qz, qw = desired_pose[3:7]
+                x, y, z = desired_pose[0:3]
+                qx, qy, qz, qw = desired_pose[3:7]
 
-            joint_solution = self.compute_ik(x, y, z, qx, qy, qz, qw)
+                joint_solution = self.compute_ik(x, y, z, qx, qy, qz, qw)
 
-            if joint_solution is None:
-                self.get_logger().error(f"IK failed at waypoint {i+1}/{num_waypoints}")
-                return
+                if joint_solution is None:
+                    self.get_logger().error(f"IK failed at waypoint {i+1}/{num_waypoints}")
+                    self.is_callback_running = False # Reset flag
+                    return
 
-            point = JointTrajectoryPoint()
-            ik_joint_dict = {}
+                point = JointTrajectoryPoint()
+                ik_joint_dict = {}
 
-            for i, name in enumerate(joint_solution.name):
-                if i < 6:
-                    ik_joint_dict[name] = joint_solution.position[i]
+                for i, name in enumerate(joint_solution.name):
+                    if i < 6:
+                        ik_joint_dict[name] = joint_solution.position[i]
 
-            point.positions = [
-                ik_joint_dict['shoulder_pan_joint'],
-                ik_joint_dict['shoulder_lift_joint'],
-                ik_joint_dict['elbow_joint'],
-                ik_joint_dict['wrist_1_joint'],
-                ik_joint_dict['wrist_2_joint'],
-                ik_joint_dict['wrist_3_joint']
-            ]
+                point.positions = [
+                    ik_joint_dict['shoulder_pan_joint'],
+                    ik_joint_dict['shoulder_lift_joint'],
+                    ik_joint_dict['elbow_joint'],
+                    ik_joint_dict['wrist_1_joint'],
+                    ik_joint_dict['wrist_2_joint'],
+                    ik_joint_dict['wrist_3_joint']
+                ]
 
-            point.velocities = [0.0] * 6
+                point.velocities = [0.0] * 6
 
-            point.time_from_start.sec = int(t)
-            point.time_from_start.nanosec = int((t - int(t)) * 1e9)
+                point.time_from_start.sec = int(t)
+                point.time_from_start.nanosec = int((t - int(t)) * 1e9)
 
-            joint_traj.points.append(point)
+                joint_traj.points.append(point)
+
+        finally:
+            # Always ensure we reset this flag
+            self.is_callback_running = False
 
         # Compute velocities using finite differences
         for i in range(len(joint_traj.points)):
@@ -629,14 +644,15 @@ class VisualServo(Node):
 
     def _visual_servo_callback(self):
         """
-        Timer callback for visual servoing control at 10 Hz.
-
-        This callback:
-        1. Reads current AR marker position and computes target pose
-        2. Computes IK for target pose
-        3. Uses PID controller to track target joint positions
+        Visual servoing control step.
+        Called directly from main loop (not a timer!) to avoid recursive spin.
         """
+
+        if self.is_callback_running:
+            return
+
         elapsed = (self.get_clock().now() - self._vs_start_time).nanoseconds / 1e9
+        print("CALLBACK running at t =", elapsed)
 
         # current joint state
         if self.current_joint_state is None:
@@ -668,11 +684,11 @@ class VisualServo(Node):
             current_joint_dict['wrist_2_joint'][1],
             current_joint_dict['wrist_3_joint'][1]
         ])
-
+        
         # Compute target pose from AR marker position
         target_result = self.compute_vertical_offset_target(
             self.args.ar_marker,
-            vertical_offset=0.15
+            vertical_offset=self.hover_height
         )
 
         if target_result is None:
@@ -682,15 +698,67 @@ class VisualServo(Node):
 
         target_position_ee, target_orientation_ee = target_result
 
+        # Get transform of 'tool0' relative to 'base_link'
+        tool0_transform = self.tf_buffer.lookup_transform(
+            'base_link',       # Target frame (fixed frame)
+            'tool0',           # Source frame (the end effector)
+            rclpy.time.Time()  # Get the latest available transform
+        )
+        
+        # Access position
+        t = tool0_transform.transform.translation
+        position = np.array([t.x, t.y, t.z])
+
+
+        #========================================================================================
+        # mini steps:
+        print("Target pose (position + orientation):", target_result)
+
+        target_position_ee, target_orientation_ee = target_result
+
         # Compute IK for target end-effector pose
         x, y, z = target_position_ee
         qx, qy, qz, qw = target_orientation_ee
 
+
+        e_vec = target_position_ee - position[0:3]
+        e_norm = np.linalg.norm(e_vec)
+        print("Distance is ", e_norm)
+        if (e_norm < 0.01):
+            #self._vs_done = True
+            velocity = np.zeros(6)
+            commanded_velocity = self.velocity_controller.step_control(
+                current_position,
+                velocity,
+                current_position,
+                current_velocity
+            )
+
+            # zero_vel_msg = Float64MultiArray()
+            # zero_vel_msg.data = [0.0] * 6  # Create a list of 6 zeros
+            # self._velocity_pub.publish(zero_vel_msg)
+            vel_msg = Float64MultiArray()
+            vel_msg.data = commanded_velocity.tolist()
+            self._velocity_pub.publish(vel_msg)
+            return
+        e_normalised = e_vec/ e_norm 
+        goal_pos_scaled = position[0:3] + 0.1 * e_normalised
+        #========================================================================================
+
+
+        # Compute IK for target end-effector pose
+        x, y, z = goal_pos_scaled
+        qx, qy, qz, qw = target_orientation_ee
+
+        # This call uses spin_until_future_complete.
+        # It IS safe now because we are calling this function from the main loop,
+        # not from inside a timer callback.
         joint_solution = self.compute_ik(x, y, z, qx, qy, qz, qw)
+
+        print("IK joint solution:", joint_solution)
 
         if joint_solution is None:
             self.get_logger().warn('IK failed for current target, maintaining previous command')
-            # Don't update target, keep tracking last valid target
             return
 
         # Extract target joint positions from IK solution
@@ -711,14 +779,6 @@ class VisualServo(Node):
         # Target velocity is zero (pure position control)
         target_joint_velocity = np.zeros(6)
 
-        # # Log data if enabled
-        # if self.log_enabled:
-        #     self.log_times.append(elapsed)
-        #     self.log_actual_positions.append(current_position)
-        #     self.log_actual_velocities.append(current_velocity)
-        #     self.log_target_positions.append(target_joint_position)
-        #     self.log_target_velocities.append(target_joint_velocity)
-
         # Compute control command using PID controller
         commanded_velocity = self.velocity_controller.step_control(
             target_joint_position,
@@ -731,11 +791,12 @@ class VisualServo(Node):
         vel_msg = Float64MultiArray()
         vel_msg.data = commanded_velocity.tolist()
         self._velocity_pub.publish(vel_msg)
+        print("Published velocity command:", commanded_velocity)
 
     def _interpolate_trajectory(self, joint_traj, t, current_index=0):
         """
         Interpolate trajectory waypoints based on current time.
-        Based on interpolate_path from 106a Lab 7 Fall 2024.
+        Based on interget_loggerpolate_path from 106a Lab 7 Fall 2024.
 
         Parameters
         ----------
@@ -747,7 +808,7 @@ class VisualServo(Node):
             Waypoint index from which to start search
 
         Returns
-        -------
+        -------target_position_ee
         tuple
             (target_position, target_velocity, current_index)
         """
@@ -855,24 +916,34 @@ class VisualServo(Node):
             self.get_logger().info(f"Maintaining vertical offset: 0.15 meters above marker")
             self.get_logger().info(f"Controller: {self.controller_type}")
 
+            print("=== Starting Visual Servoing Mode ===")
+            print(f"Tracking AR marker {self.args.ar_marker}")
+            print(f"Maintaining vertical offset: 0.15 meters above marker")
+            print(f"Controller: {self.controller_type}")
+
             if self.controller_type != 'pid':
                 self.get_logger().error("Visual servoing requires --controller pid")
+                print("Visual servoing requires --controller pid")
                 return
 
             self.execute_visual_servoing()
             self.get_logger().info("=== Visual Servoing Complete ===")
+            print("=== Visual Servoing Complete ===")
             return
 
         self.trajectory = self.create_trajectory()
 
         if self.trajectory is None:
             self.get_logger().error("Failed to create trajectory")
+            print("Failed to create Trajectory ")
             return
 
         self.get_logger().info("Trajectory created! Publishing visualization to RViz...")
+        print("Trajectory created! Publishing visualization to RViz...")
         self.start_visualization_timer()
 
         self.get_logger().info("\nPress ENTER to execute trajectory (Ctrl+C to cancel)")
+        print("\nPress ENTER to execute trajectory (Ctrl+C to cancel)")
         while rclpy.ok():
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                 line = sys.stdin.readline()
@@ -881,16 +952,14 @@ class VisualServo(Node):
 
         self.execute_trajectory()
         self.get_logger().info("=== Execution Complete ===")
+        print("=== Execution Complete ===")
 
     def execute_visual_servoing(self):
         """
         Execute real-time visual servoing to track AR marker with vertical offset.
-
-        This method sets up a control loop that:
-        1. Continuously reads AR marker position from TF
-        2. Computes target end-effector pose with vertical offset
-        3. Computes IK for target pose
-        4. Uses PID controller to track target joint positions
+        
+        Refactored to run as a main loop instead of a timer to avoid 
+        recursive spinning in compute_ik.
         """
         # Switch to forward velocity controller
         self._switch_to_forward_controller()
@@ -931,11 +1000,21 @@ class VisualServo(Node):
         self.get_logger().info('Starting visual servoing control loop at 10 Hz...')
         self.get_logger().info('Press Ctrl+C to stop')
 
-        self._control_timer = self.create_timer(0.1, self._visual_servo_callback)
+        # Initialize start time here (after blocking lookup) so elapsed time starts at 0
+        self._vs_start_time = self.get_clock().now()
 
+        # NOTE: Replaced timer with direct loop call
         try:
             while rclpy.ok() and not self._vs_done:
-                rclpy.spin_once(self, timeout_sec=0.1)
+                # Update joint states and transforms
+                rclpy.spin_once(self, timeout_sec=0.01)
+                
+                # Execute logic
+                self._visual_servo_callback()
+                
+                # Sleep to maintain roughly 10Hz
+                time.sleep(0.05)
+                
         except KeyboardInterrupt:
             self.get_logger().info('Visual servoing interrupted by user')
 
@@ -943,7 +1022,6 @@ class VisualServo(Node):
         vel_msg.data = [0.0] * 6
         self._velocity_pub.publish(vel_msg)
 
-        self._control_timer.cancel()
         self._switch_to_scaled_controller()
 
         self.get_logger().info('Visual servoing complete!')
