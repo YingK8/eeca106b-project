@@ -98,6 +98,14 @@ class VisualServo(Node):
             self.log_actual_velocities = []
             self.log_target_positions = []
             self.log_target_velocities = []
+            
+            # Initialize log storage
+            self.log_data = {
+                'time': [],
+                'error': [],
+                'joint_velocities': []
+            }
+            self.start_time = time.time()
 
     def joint_state_callback(self, msg):
         """Store current joint state"""
@@ -740,9 +748,31 @@ class VisualServo(Node):
             vel_msg = Float64MultiArray()
             vel_msg.data = commanded_velocity.tolist()
             self._velocity_pub.publish(vel_msg)
+            self.plot_results(
+                self.log_times,
+                self.log_actual_positions,
+                self.log_actual_velocities,
+                self.log_target_positions,
+                self.log_target_velocities
+            )
             return
         e_normalised = e_vec/ e_norm 
         goal_pos_scaled = position[0:3] + 0.1 * e_normalised
+        
+        # log the points:
+        
+        # Find elapsed time
+        elapsed = (self.get_clock().now() - self._control_start_time).nanoseconds / 1e9
+        
+        if self.log_enabled:
+            target_position, target_velocity, self._control_current_index = self._interpolate_trajectory(
+                self._control_joint_traj, elapsed, self._control_current_index
+            )
+            self.log_times.append(elapsed)
+            self.log_actual_positions.append(position[0:3])
+            self.log_actual_velocities.append(current_velocity)
+            self.log_target_positions.append(target_position) # or maybe goal_pos_scaled?
+            self.log_target_velocities.append(target_velocity) # or maybe np.zeros(6) since we are doing position control? 
         #========================================================================================
 
 
