@@ -11,6 +11,7 @@ import numpy as np
 import subprocess
 from tf2_ros import TransformListener, Buffer
 from std_msgs.msg import Float64MultiArray
+from collections import deque
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -87,6 +88,10 @@ class VisualServo(Node):
         self.viz_timer = None
         self.ar_tag_detected = False
         self.ar_tag_position = None
+
+        ## 
+        self.velocity_window_size = 5  # Number of frames to average (try 5-10)
+        self.velocity_buffer = deque(maxlen=self.velocity_window_size)
 
         self.get_logger().info("Visual Servo Node initialized")
         self.get_logger().info(f"Task: {args.task}")
@@ -664,7 +669,7 @@ class VisualServo(Node):
         elapsed = (current_time_obj - self._vs_start_time).nanoseconds / 1e9
         dt = (current_time_obj - self._last_loop_time).nanoseconds / 1e9
         self._last_loop_time = current_time_obj
-        print("CALLBACK running at t =", elapsed)
+        #print("CALLBACK running at t =", elapsed)
 
         # current joint state
         if self.current_joint_state is None:
@@ -698,6 +703,7 @@ class VisualServo(Node):
         ])
         
         # Compute target pose from AR marker position
+        # this UPDATES the tag for the AR Marker posiiton
         target_result = self.compute_vertical_offset_target(
             self.args.ar_marker,
             vertical_offset=self.hover_height
@@ -724,7 +730,7 @@ class VisualServo(Node):
 
         #========================================================================================
         # mini steps:
-        print("Target pose (position + orientation):", target_result)
+        #print("Target pose (position + orientation):", target_result)
 
         target_position_ee, target_orientation_ee = target_result
 
@@ -738,17 +744,20 @@ class VisualServo(Node):
         print("Distance is ", e_norm)
         if (e_norm < 0.014):
             # Target reached, stop moving
-            velocity = np.zeros(6)
+            self.velocity_buffer = deque([]) # empty out the velocity buffer
+            target_joint_position = current_position
+            self.velocity_controller.integral_err = 0.0 # manually set to 0
+            target_joint_velocity = np.zeros(6)
             commanded_velocity = self.velocity_controller.step_control(
-                current_position,
-                velocity,
+                target_joint_position,
+                target_joint_velocity,
                 current_position,
                 current_velocity
             )
             vel_msg = Float64MultiArray()
             vel_msg.data = commanded_velocity.tolist()
             self._velocity_pub.publish(vel_msg)
-            
+            print("Velocity Message Published is smaller than threshold and is ", vel_msg)
             # NOTE: Removed immediate plotting here. 
             # It will happen on exit/interrupt in main()
             return
@@ -766,7 +775,7 @@ class VisualServo(Node):
         # not from inside a timer callback.
         joint_solution = self.compute_ik(x, y, z, qx, qy, qz, qw)
 
-        print("IK joint solution:", joint_solution)
+        #print("IK joint solution:", joint_solution)
 
         if joint_solution is None:
             self.get_logger().warn('IK failed for current target, maintaining previous command')
@@ -787,16 +796,24 @@ class VisualServo(Node):
             ik_joint_dict['wrist_3_joint']
         ])
 
+        #instantiate raw_velocity
+        raw_velocity = 0.0
         # 5. Calculate Target Velocity (Finite Difference)
         # To avoid jumps, ensure dt is reasonable and prev exists
         if self._prev_target_joint_pos is not None and dt > 0.0001:
-            target_joint_velocity = (target_joint_position - self._prev_target_joint_pos) / dt
+            raw_velocity = (target_joint_position - self._prev_target_joint_pos) / dt
             
             # Simple limiter to prevent crazy spikes from IK flips
             max_vel = 2.0 
-            target_joint_velocity = np.clip(target_joint_velocity, -max_vel, max_vel)
+            raw_velocity = np.clip(raw_velocity, -max_vel, max_vel)
         else:
-            target_joint_velocity = np.zeros(6)
+            raw_velocity = np.zeros(6)
+
+        self.velocity_buffer.append(raw_velocity)
+        target_joint_velocity = np.mean(self.velocity_buffer, axis=0)
+        # apply final safety clip
+        max_vel = 1.0
+        target_joint_velocity = np.clip(target_joint_velocity, -max_vel, max_vel)
 
         self._prev_target_joint_pos = target_joint_position
         # Target velocity is zero (pure position control)
@@ -824,7 +841,7 @@ class VisualServo(Node):
         vel_msg = Float64MultiArray()
         vel_msg.data = commanded_velocity.tolist()
         self._velocity_pub.publish(vel_msg)
-        print("Published velocity command:", commanded_velocity)
+        print("Published velocity command:", vel_msg)
 
     def _interpolate_trajectory(self, joint_traj, t, current_index=0):
         """
@@ -1057,7 +1074,7 @@ class VisualServo(Node):
                 self._visual_servo_callback()
                 
                 # Sleep to maintain roughly 10Hz
-                time.sleep(0.05)
+                time.sleep(0.005)
                 
         except KeyboardInterrupt:
             self.get_logger().info('Visual servoing interrupted by user')
