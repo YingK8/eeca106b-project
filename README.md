@@ -1,3 +1,4 @@
 # EECS 106B
 
-stuff 
+Our EECS 106b project for visual servoing. 
+K Ying, R. Pal, A. Zheng
