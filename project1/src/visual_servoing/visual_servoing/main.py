@@ -89,8 +89,8 @@ class VisualServo(Node):
         self.ar_tag_detected = False
         self.ar_tag_position = None
 
-        ## 
-        self.velocity_window_size = 5  # Number of frames to average (try 5-10)
+        ## SPECIFICALLY TO PREVENT JITTER IN THE CUSTOM VISUAL SERVOING IMPLEMENTATION
+        self.velocity_window_size = 5  # Number of frames to average
         self.velocity_buffer = deque(maxlen=self.velocity_window_size)
 
         self.get_logger().info("Visual Servo Node initialized")
