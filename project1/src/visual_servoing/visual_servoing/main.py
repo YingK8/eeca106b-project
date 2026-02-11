@@ -52,6 +52,10 @@ class VisualServo(Node):
 
         self.hover_height = 0.5
 
+        # State variables for visual servoing velocity calculation
+        self._prev_target_joint_pos = None
+        self._last_loop_time = None
+
         # Use ReentrantCallbackGroup to prevent service call deadlocks
         self.cb_group = ReentrantCallbackGroup()
 
@@ -98,6 +102,9 @@ class VisualServo(Node):
             self.log_actual_velocities = []
             self.log_target_positions = []
             self.log_target_velocities = []
+            
+            # Use a fixed start time for consistent logging
+            self.log_start_time = self.get_clock().now()
 
     def joint_state_callback(self, msg):
         """Store current joint state"""
@@ -532,7 +539,12 @@ class VisualServo(Node):
         self._control_current_index = 0
         self._control_max_index = len(joint_traj.points) - 1
         self._control_iteration = 0
-        self._control_start_time = self.get_clock().now()
+        
+        # We can reset the log start time here for trajectory tasks, 
+        # or use the one from __init__. For trajectory tasks, it's often 
+        # cleaner to start from 0 for each run.
+        self.log_start_time = self.get_clock().now()
+        self._control_start_time = self.log_start_time # Align them
         self._control_done = False
 
         # Reset logs
@@ -570,19 +582,13 @@ class VisualServo(Node):
 
         self.get_logger().info('Velocity control execution complete!')
 
-        if self.log_enabled:
-            self.plot_results(
-                self.log_times,
-                self.log_actual_positions,
-                self.log_actual_velocities,
-                self.log_target_positions,
-                self.log_target_velocities
-            )
+        # Plotting moved to main() finally block
 
     def _velocity_control_callback(self):
         """Timer callback for velocity control at 10 Hz"""
         # Find elapsed time
-        elapsed = (self.get_clock().now() - self._control_start_time).nanoseconds / 1e9
+        current_time_obj = self.get_clock().now()
+        elapsed = (current_time_obj - self._control_start_time).nanoseconds / 1e9
 
         # Get current joint state
         if self.current_joint_state is None:
@@ -620,7 +626,9 @@ class VisualServo(Node):
 
         # Log data if enabled
         if self.log_enabled:
-            self.log_times.append(elapsed)
+            # Use global time for logging consistency
+            total_elapsed = (current_time_obj - self.log_start_time).nanoseconds / 1e9
+            self.log_times.append(total_elapsed)
             self.log_actual_positions.append(current_position)
             self.log_actual_velocities.append(current_velocity)
             self.log_target_positions.append(target_position)
@@ -651,7 +659,11 @@ class VisualServo(Node):
         if self.is_callback_running:
             return
 
-        elapsed = (self.get_clock().now() - self._vs_start_time).nanoseconds / 1e9
+        current_time_obj = self.get_clock().now()
+        # elapsed relative to this VS session start
+        elapsed = (current_time_obj - self._vs_start_time).nanoseconds / 1e9
+        dt = (current_time_obj - self._last_loop_time).nanoseconds / 1e9
+        self._last_loop_time = current_time_obj
         print("CALLBACK running at t =", elapsed)
 
         # current joint state
@@ -724,8 +736,8 @@ class VisualServo(Node):
         e_vec = target_position_ee - position[0:3]
         e_norm = np.linalg.norm(e_vec)
         print("Distance is ", e_norm)
-        if (e_norm < 0.01):
-            #self._vs_done = True
+        if (e_norm < 0.014):
+            # Target reached, stop moving
             velocity = np.zeros(6)
             commanded_velocity = self.velocity_controller.step_control(
                 current_position,
@@ -733,20 +745,19 @@ class VisualServo(Node):
                 current_position,
                 current_velocity
             )
-
-            # zero_vel_msg = Float64MultiArray()
-            # zero_vel_msg.data = [0.0] * 6  # Create a list of 6 zeros
-            # self._velocity_pub.publish(zero_vel_msg)
             vel_msg = Float64MultiArray()
             vel_msg.data = commanded_velocity.tolist()
             self._velocity_pub.publish(vel_msg)
+            
+            # NOTE: Removed immediate plotting here. 
+            # It will happen on exit/interrupt in main()
             return
+
         e_normalised = e_vec/ e_norm 
         goal_pos_scaled = position[0:3] + 0.1 * e_normalised
-        #========================================================================================
-
-
+        
         # Compute IK for target end-effector pose
+        # We need the JOINT target for the controller and logging, not just cartesian
         x, y, z = goal_pos_scaled
         qx, qy, qz, qw = target_orientation_ee
 
@@ -776,8 +787,30 @@ class VisualServo(Node):
             ik_joint_dict['wrist_3_joint']
         ])
 
+        # 5. Calculate Target Velocity (Finite Difference)
+        # To avoid jumps, ensure dt is reasonable and prev exists
+        if self._prev_target_joint_pos is not None and dt > 0.0001:
+            target_joint_velocity = (target_joint_position - self._prev_target_joint_pos) / dt
+            
+            # Simple limiter to prevent crazy spikes from IK flips
+            max_vel = 2.0 
+            target_joint_velocity = np.clip(target_joint_velocity, -max_vel, max_vel)
+        else:
+            target_joint_velocity = np.zeros(6)
+
+        self._prev_target_joint_pos = target_joint_position
         # Target velocity is zero (pure position control)
-        target_joint_velocity = np.zeros(6)
+        # target_joint_velocity = np.zeros(6)
+
+        # Log data AFTER we have valid joint targets
+        if self.log_enabled:
+            # Use global log start time for consistency
+            total_elapsed = (current_time_obj - self.log_start_time).nanoseconds / 1e9
+            self.log_times.append(total_elapsed)
+            self.log_actual_positions.append(current_position)
+            self.log_actual_velocities.append(current_velocity)
+            self.log_target_positions.append(target_joint_position) 
+            self.log_target_velocities.append(target_joint_velocity)
 
         # Compute control command using PID controller
         commanded_velocity = self.velocity_controller.step_control(
@@ -851,27 +884,26 @@ class VisualServo(Node):
 
         return target_position, target_velocity, current_index
 
-    def plot_results(
-        self,
-        times,
-        actual_positions,
-        actual_velocities,
-        target_positions,
-        target_velocities
-    ):
+    def plot_results(self):
         """
-        Plots results.
+        Plots results accumulated in self.log_* variables.
         """
         if plt is None:
             self.get_logger().error("Matplotlib not found, skipping plot.")
             return
 
+        if not self.log_times:
+            self.get_logger().info("No data logged to plot.")
+            return
+
+        self.get_logger().info(f"Plotting {len(self.log_times)} data points...")
+
         # Make everything an ndarray
-        times = np.array(times)
-        actual_positions = np.array(actual_positions)
-        actual_velocities = np.array(actual_velocities)
-        target_positions = np.array(target_positions)
-        target_velocities = np.array(target_velocities)
+        times = np.array(self.log_times)
+        actual_positions = np.array(self.log_actual_positions)
+        actual_velocities = np.array(self.log_actual_velocities)
+        target_positions = np.array(self.log_target_positions)
+        target_velocities = np.array(self.log_target_velocities)
 
         joint_names = [
             'shoulder_pan', 'shoulder_lift', 'elbow',
@@ -885,7 +917,10 @@ class VisualServo(Node):
             # Position
             plt.subplot(joint_num, 2, 2*i + 1)
             plt.plot(times, actual_positions[:, i], label='Actual')
-            plt.plot(times, target_positions[:, i], label='Desired', linestyle='--')
+            # Check dimensions before plotting target (safety check)
+            if target_positions.shape[1] > i:
+                plt.plot(times, target_positions[:, i], label='Desired', linestyle='--')
+            
             plt.ylabel(f"{joint_name} Pos (rad)")
             if i == 0:
                 plt.title("Joint Position Tracking")
@@ -896,7 +931,9 @@ class VisualServo(Node):
             # Velocity
             plt.subplot(joint_num, 2, 2*i + 2)
             plt.plot(times, actual_velocities[:, i], label='Actual')
-            plt.plot(times, target_velocities[:, i], label='Desired', linestyle='--')
+            if target_velocities.shape[1] > i:
+                plt.plot(times, target_velocities[:, i], label='Desired', linestyle='--')
+            
             plt.ylabel(f"{joint_name} Vel (rad/s)")
             if i == 0:
                 plt.title("Joint Velocity Tracking")
@@ -967,19 +1004,23 @@ class VisualServo(Node):
         self._vs_mode = True  # Flag to indicate visual servoing mode
         self._vs_last_valid_target = None  # Last known valid AR marker position
         self._vs_done = False  # Flag to stop control loop
-        self._vs_start_time = self.get_clock().now()
-
-        # Reset PID controller integral term
-        self.velocity_controller.integral_err = np.zeros(6)
-        self.velocity_controller.prev_time = self.get_clock().now()
-
-        # Reset logs
+        
+        # Initialize logs if enabled, but use global start time from __init__
         if self.log_enabled:
+            # Clear logs for this run, but keep the start time reference
             self.log_times = []
             self.log_actual_positions = []
             self.log_actual_velocities = []
             self.log_target_positions = []
             self.log_target_velocities = []
+
+        # Start time for control logic relative timing
+        self._vs_start_time = self.get_clock().now()
+        self._last_loop_time = self._vs_start_time
+
+        # Reset PID controller integral term
+        self.velocity_controller.integral_err = np.zeros(6)
+        self.velocity_controller.prev_time = self.get_clock().now()
 
         self._velocity_pub = self.create_publisher(
             Float64MultiArray,
@@ -1002,6 +1043,9 @@ class VisualServo(Node):
 
         # Initialize start time here (after blocking lookup) so elapsed time starts at 0
         self._vs_start_time = self.get_clock().now()
+        # Reset global log start time to now so plots start at 0
+        if self.log_enabled:
+            self.log_start_time = self._vs_start_time
 
         # NOTE: Replaced timer with direct loop call
         try:
@@ -1026,14 +1070,7 @@ class VisualServo(Node):
 
         self.get_logger().info('Visual servoing complete!')
 
-        if self.log_enabled:
-            self.plot_results(
-                self.log_times,
-                self.log_actual_positions,
-                self.log_actual_velocities,
-                self.log_target_positions,
-                self.log_target_velocities
-            )
+        # Plotting handled in main() finally block
 
 
 def switch_controllers(controller_type):
@@ -1100,6 +1137,12 @@ def main(args=None):
         # Switch back to default controller on cleanup
         print("Cleaning up: switching back to default controller...")
         switch_controllers('default')
+
+        # Plot accumulated results before destroying node
+        if node.log_enabled:
+            print("Generating plots...")
+            node.plot_results()
+
         node.destroy_node()
         rclpy.shutdown()
 
