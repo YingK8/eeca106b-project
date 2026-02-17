@@ -32,11 +32,48 @@ def trajectory_generator(path, time_tol):
     ## Compute the distance between segments
     for i in range(m):
         ## Enter code here
-        pass
+        d_i = np.linalg.norm(path[i+1] - path[i])
+        segment_time[i] = d_i # *temporarily* store the distances in the segment_time
+
+    total_segment_lengths = np.sum(segment_time)
+    segment_time = segment_time * time_tol / total_segment_lengths # finishes computing the segment_times
 
     ## Compute the coefficient matrix
+    T = 0
     for j in range(m):
         ## Enter code here
-        pass
+        t_i = T
+        T = T + segment_time[j]
+        t_f = T
+
+        # calculating the constraints matrix
+        M = np.matrix(
+            [
+                [1, t_i, t_i**2, t_i**3],       # inital pos
+                [0, 1, 2 * t_i, 2 * (t_i**2)],  # inital vel
+                [1, t_f, t_f**2, t_f**3],       # final pos
+                [0, 1, 2 * t_f, 2 * (t_f**2)],  # final vel
+            ]
+        )
+        constraints[4*j : 4*(j+1), 0 : 4] = M
+
+        # calculating the conditions matrix (path is length m+1)
+        x_i, y_i = path[j]
+        x_f, y_f = path[j+1]
+        C = np.matrix(
+            [
+                [x_i, y_i],     # inital pos
+                [0.3, 0.3],     # inital vel
+                [x_f, y_f],     # final pos
+                [0.3, 0.3],     # final vel
+            ]
+        )
+        conditions[4*j : 4*(j+1), 0] = C
+    
+    conditions[1] = np.array([0, 0]) # set the initial velocity to zero
+    conditions[3] = np.array([0, 0]) # set the final velocity
+    
+    # solve for the coefficient matrix
+    coefficient = np.linalg.solve(constraints, conditions)  
 
     return coefficient, segment_time
