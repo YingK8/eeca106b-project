@@ -70,8 +70,12 @@ def trajectory_generator(path, time_tol):
         )
         conditions[4*j : 4*(j+1), 0] = C
     
+    if len(conditions) < 2:
+        # Errored response
+        print("Failed because there is not enough points that are registered. The conditions matrix is less than 2. ")
+        return np.zeros((4*m)), segment_time
     conditions[1] = np.array([0, 0]) # set the initial velocity to zero
-    conditions[3] = np.array([0, 0]) # set the final velocity
+    conditions[-2] = np.array([0, 0]) # set the final velocity
     
     # solve for the coefficient matrix
     coefficient = np.linalg.solve(constraints, conditions)  
