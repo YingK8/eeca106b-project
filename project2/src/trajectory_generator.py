@@ -50,12 +50,12 @@ def trajectory_generator(path, time_tol):
         M = np.matrix(
             [
                 [1, t_i, t_i**2, t_i**3],       # inital pos
-                [0, 1, 2 * t_i, 2 * (t_i**2)],  # inital vel
+                [0, 1, 2 * t_i, 3 * (t_i**2)],  # inital vel
                 [1, t_f, t_f**2, t_f**3],       # final pos
-                [0, 1, 2 * t_f, 2 * (t_f**2)],  # final vel
+                [0, 1, 2 * t_f, 3 * (t_f**2)],  # final vel
             ]
         )
-        constraints[4*j : 4*(j+1), 0 : 4] = M
+        constraints[4*j : 4*(j+1), :] = M
 
         # calculating the conditions matrix (path is length m+1)
         x_i, y_i = path[j]
@@ -68,7 +68,7 @@ def trajectory_generator(path, time_tol):
                 [0.3, 0.3],     # final vel
             ]
         )
-        conditions[4*j : 4*(j+1), 0] = C
+        conditions[4*j : 4*(j+1), :] = C
     
     if len(conditions) < 2:
         # Errored response
