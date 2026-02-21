@@ -1,0 +1,21 @@
+[2.357s] Invoking command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/src/visual_servoing': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/install/visual_servoing/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/visual_servoing build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/install.log --single-version-externally-managed install_data
+[2.567s] running egg_info
+[2.568s] writing ../../build/visual_servoing/visual_servoing.egg-info/PKG-INFO
+[2.571s] writing dependency_links to ../../build/visual_servoing/visual_servoing.egg-info/dependency_links.txt
+[2.574s] writing entry points to ../../build/visual_servoing/visual_servoing.egg-info/entry_points.txt
+[2.576s] writing requirements to ../../build/visual_servoing/visual_servoing.egg-info/requires.txt
+[2.578s] writing top-level names to ../../build/visual_servoing/visual_servoing.egg-info/top_level.txt
+[2.587s] reading manifest file '../../build/visual_servoing/visual_servoing.egg-info/SOURCES.txt'
+[2.608s] writing manifest file '../../build/visual_servoing/visual_servoing.egg-info/SOURCES.txt'
+[2.610s] running build
+[2.610s] running build_py
+[2.616s] running install
+[2.616s] running install_lib
+[2.625s] running install_data
+[2.629s] running install_egg_info
+[2.633s] removing '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/install/visual_servoing/lib/python3.10/site-packages/visual_servoing-0.0.0-py3.10.egg-info' (and everything under it)
+[2.638s] Copying ../../build/visual_servoing/visual_servoing.egg-info to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/install/visual_servoing/lib/python3.10/site-packages/visual_servoing-0.0.0-py3.10.egg-info
+[2.679s] running install_scripts
+[2.709s] Installing main script to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/install/visual_servoing/lib/visual_servoing
+[2.712s] writing list of installed files to '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/install.log'
+[2.726s] Invoked command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/src/visual_servoing' returned '0': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/install/visual_servoing/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/visual_servoing build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project1/build/visual_servoing/install.log --single-version-externally-managed install_data

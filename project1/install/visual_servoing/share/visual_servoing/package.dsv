@@ -1,0 +1,6 @@
+source;share/visual_servoing/hook/pythonpath.ps1
+source;share/visual_servoing/hook/pythonpath.dsv
+source;share/visual_servoing/hook/pythonpath.sh
+source;share/visual_servoing/hook/ament_prefix_path.ps1
+source;share/visual_servoing/hook/ament_prefix_path.dsv
+source;share/visual_servoing/hook/ament_prefix_path.sh

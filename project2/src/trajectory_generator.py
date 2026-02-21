@@ -13,7 +13,7 @@ def trajectory_generator(path, time_tol):
 
     # The matrix that describes all the constraints of the system is named as
     # constraints in this file
-    constraints = np.zeros((4 * m, 4))
+    constraints = np.zeros((4 * m, 4*m))
     conditions = np.zeros((4 * m, 2))
     coefficient = np.zeros((4 * m, 2))
     segment_time = np.zeros(m)
@@ -68,6 +68,10 @@ def trajectory_generator(path, time_tol):
                 [0.3, 0.3],     # final vel
             ]
         )
+
+        Coeff = np.linalg.solve(M, C) 
+
+
         conditions[4*j : 4*(j+1), :] = C
     
     if len(conditions) < 2:
