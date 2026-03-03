@@ -59,7 +59,7 @@ def shortestpath(map_data, start, goal):
         cell = numbertocell([mx, my], current_node)
         neighbors = [
             (cell[0] + dx, cell[1] + dy)
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (-1, -1), (1, 1), (1, -1)]
         ]
         valid_neighbors = []
         for neighbor in neighbors:
@@ -68,8 +68,12 @@ def shortestpath(map_data, start, goal):
                 if blockflag[neighbor_node] == 0:  # Check if the neighbor is not blocked
                     valid_neighbors.append(neighbor_node)
         
-        for neighbor_node in valid_neighbors:
-            alt_dist = dist[current_node] + xy_res # Adjacent cost to the neighbor
+        for i, neighbor_node in enumerate(valid_neighbors):
+            if i >=4:
+                # Diagonal movement cost is sqrt(2) times the adjacent cost
+                alt_dist = dist[current_node] + xy_res * np.sqrt(2)
+            else:
+                alt_dist = dist[current_node] + xy_res # Adjacent cost to the neighbor
             if alt_dist < dist[neighbor_node]:
                 dist[neighbor_node] = alt_dist
                 prev[neighbor_node] = current_node

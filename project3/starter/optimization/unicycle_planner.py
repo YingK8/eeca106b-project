@@ -29,6 +29,8 @@ class TrackingParams:
     obstacle_buffer: float = 0.1
     Q: np.ndarray = field(default_factory=lambda: np.diag([1.0, 1.0, 0.5]))
     R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
+    # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
+    P: np.ndarray = field(default_factory=lambda: np.diag([10.0, 10.0, 5.0]))
 
 
 @dataclass
@@ -162,14 +164,37 @@ class UnicycleTrackingPlanner:
         U = opti.variable(2, N)
 
         ## TODO: Objective — quadratic tracking cost with terminal penalty
+        xf = ca.DM(goal)
+        Q = ca.DM(p.Q)
+        R = ca.DM(p.R)
+        P = Q + A.T @ P @ A - A.T @ P @ B @ ca.inv(R + B.T @ P @ B) @ B.T @ P @ A  # LQR terminal cost
+        P = ca.DM(p.P)  # Terminal cost weight (can be tuned separately if desired)
+
+        cost = (X - xf).T @ Q @ (X - xf) + U.T @ R @ U + (X[:, -1] - xf).T @ P @ (X[:, -1] - xf) # Terminal cost with P matrix
 
         ## TODO: Dynamics constraints — Euler integration (dt is fixed here)
 
+        x_Np1 = X[0, 1:] + dt * U[0, :] * ca.cos(X[2, 1:])
+        y_Np1 = X[1, 1:] + dt * U[0, :] * ca.sin(X[2, 1:])
+        theta_Np1 = X[2, 1:] + dt * U[1, :]
+
         ## TODO: Boundary constraints — pin start and goal states
+        xi = ca.DM(start)
+
+        opti.subject_to(X[:, 0] == xi)
+        opti.subject_to(X[:, -1] == xf)
 
         ## TODO: Control bounds — bound v and omega
 
+        opti.subject_to(opti.bounded(p.v_min, U[0, :], p.v_max))
+        opti.subject_to(opti.bounded(p.omega_min, U[1, :], p.omega_max))
+
         ## TODO: Obstacle avoidance — keep all nodes outside each obstacle
+
+        for obs in obstacles:
+            cx, cy = obs.center
+            r = obs.radius
+            opti.subject_to((X[0,:] - cx) ** 2 + (X[1, :] - cy) ** 2 >= (r + p.obstacle_buffer) ** 2)
 
         opti.solver(
             "ipopt",
