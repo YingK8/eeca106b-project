@@ -42,8 +42,8 @@ def shortestpath(map_data, start, goal):
     start_cell = worldtocell(leftbound, xy_res, start)
     goal_cell = worldtocell(leftbound, xy_res, goal)
 
-    start_node = celltonumber(start_cell, mx)
-    goal_node = celltonumber(goal_cell, mx)
+    start_node = celltonumber(segment ,start_cell)
+    goal_node = celltonumber(segment, goal_cell)
 
     dist[start_node] = 0
     pq.append((0, start_node))  # (distance, node)
@@ -64,7 +64,7 @@ def shortestpath(map_data, start, goal):
         valid_neighbors = []
         for neighbor in neighbors:
             if 0 <= neighbor[0] < mx and 0 <= neighbor[1] < my:
-                neighbor_node = celltonumber(neighbor, mx)
+                neighbor_node = celltonumber(segment, neighbor)
                 if blockflag[neighbor_node] == 0:  # Check if the neighbor is not blocked
                     valid_neighbors.append(neighbor_node)
         
@@ -88,7 +88,7 @@ def shortestpath(map_data, start, goal):
     current_node = goal_node
     while current_node != -1:
         cell = numbertocell([mx, my], current_node)
-        world_pos = celltoworld(leftbound, xy_res, cell)
+        world_pos = celltoworld(leftbound, resolution, cell)
         path.append(world_pos)
         current_node = prev[current_node]
     
