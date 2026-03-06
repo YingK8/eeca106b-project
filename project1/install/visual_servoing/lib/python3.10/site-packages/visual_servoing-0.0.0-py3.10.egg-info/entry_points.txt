@@ -1,3 +1,0 @@
-[console_scripts]
-main = visual_servoing.main:main
-
