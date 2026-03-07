@@ -175,9 +175,13 @@ class UnicycleTrackingPlanner:
 
         ## TODO: Dynamics constraints — Euler integration (dt is fixed here)
 
-        x_Np1 = X[0, 1:] + dt * U[0, :] * ca.cos(X[2, 1:])
-        y_Np1 = X[1, 1:] + dt * U[0, :] * ca.sin(X[2, 1:])
-        theta_Np1 = X[2, 1:] + dt * U[1, :]
+        x_Np1 = X[0, :-1] + dt * U[0, :] * ca.cos(X[2, :-1])
+        y_Np1 = X[1, :-1] + dt * U[0, :] * ca.sin(X[2, :-1])
+        theta_Np1 = X[2, :-1] + dt * U[1, :]
+        
+        opti.subject_to(X[0, 1:] == x_Np1)
+        opti.subject_to(X[1, 1:] == y_Np1)
+        opti.subject_to(X[2, 1:] == theta_Np1)
 
         ## TODO: Boundary constraints — pin start and goal states
         xi = ca.DM(start)
@@ -187,7 +191,6 @@ class UnicycleTrackingPlanner:
 
         ## TODO: Control bounds — bound v and omega
 
-        import pdb; pdb.set_trace()
 
         opti.subject_to(opti.bounded(p.v_min, U[0, :], p.v_max))
         opti.subject_to(opti.bounded(p.omega_min, U[1, :], p.omega_max))
