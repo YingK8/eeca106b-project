@@ -10,3 +10,5 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -e .
 ```
+
+When running turtlebot_controller.py remember to build the ros2 package and to run it with ros2 while NOT in your virtual environment.
