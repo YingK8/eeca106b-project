@@ -8,9 +8,9 @@
 *.synctex.gz
 *.toc
 
-.build/
-.install/
-.log/
+build/
+install/
+log/
 
 
 # macOS artifacts
