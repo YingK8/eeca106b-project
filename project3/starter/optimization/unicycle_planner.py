@@ -20,18 +20,18 @@ class PlannerParams:
 @dataclass
 class TrackingParams:
     """Parameters for the quadratic-cost tracking planner."""
-    N: int = 100
+    ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
+    N: int = 300               # Increased so total time is 15.0 seconds!
     dt: float = 0.1
-    v_min: float = -0.1
-    v_max: float = 1.0
-    omega_min: float = -2.0
-    omega_max: float = 2.0
-    obstacle_buffer: float = 0.1
+    v_min: float = 0.0         # Good, no reverse for tracking
+    v_max: float = 0.2        # Physical limit of Turtlebot
+    omega_min: float = -0.25    # Physical limit of Turtlebot
+    omega_max: float = 0.25
+    obstacle_buffer: float = 2
     Q: np.ndarray = field(default_factory=lambda: np.diag([1.0, 1.0, 0.5]))
     R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
     # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
     P: np.ndarray = field(default_factory=lambda: np.diag([10.0, 10.0, 5.0]))
-
 
 @dataclass
 class PlannerResult:
@@ -168,10 +168,16 @@ class UnicycleTrackingPlanner:
         Q = ca.DM(p.Q)
         R = ca.DM(p.R)
         P = ca.DM(p.P)  # Terminal cost weight (can be tuned separately if desired)
-        # P = Q + A.T @ P @ A - A.T @ P @ B @ ca.inv(R + B.T @ P @ B) @ B.T @ P @ A  # LQR terminal cost
-        #P = ca.DM(p.P)  # Terminal cost weight (can be tuned separately if desired)
 
-        cost = (X[:,:-1] - xf).T @ Q @ (X[:,:-1] - xf) + U.T @ R @ U + (X[:, -1] - xf).T @ P @ (X[:, -1] - xf) # Terminal cost with P matrix
+        # Scalar cost: sum over k of (x_k - xf)' Q (x_k - xf) + u_k' R u_k, plus terminal (x_N - xf)' P (x_N - xf)
+        diff_x = X[:, :-1] - xf  # (3, N)
+        state_cost = ca.sum1(ca.sum2(diff_x * (Q @ diff_x)))  # sum over k of (x_k - xf)' Q (x_k - xf)
+        control_cost = ca.sum1(ca.sum2(U * (R @ U)))         # sum over k of u_k' R u_k
+        term_diff = X[:, -1] - xf
+        terminal_cost = (term_diff.T @ P) @ term_diff
+        cost = state_cost + control_cost + terminal_cost
+
+        opti.minimize(cost)
 
         ## TODO: Dynamics constraints — Euler integration (dt is fixed here)
 
