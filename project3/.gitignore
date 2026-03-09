@@ -8,6 +8,11 @@
 *.synctex.gz
 *.toc
 
+.build/
+.install/
+.log/
+
+
 # macOS artifacts
 __MACOSX/
 
