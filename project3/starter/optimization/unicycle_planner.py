@@ -7,6 +7,7 @@ from optimization.obstacles import CircularObstacle
 @dataclass
 class PlannerParams:
     """Parameters for the minimum-time planner."""
+    ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
     N: int = 100
     v_min: float = -0.1
     v_max: float = 1.0
@@ -21,7 +22,7 @@ class PlannerParams:
 class TrackingParams:
     """Parameters for the quadratic-cost tracking planner."""
     ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
-    N: int = 300               # Increased so total time is 15.0 seconds!
+    N: int = 100
     dt: float = 0.1
     v_min: float = 0.0         # Good, no reverse for tracking
     v_max: float = 0.2        # Physical limit of Turtlebot

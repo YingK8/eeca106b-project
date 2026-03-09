@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project3-starter"
+name = "project3"
 version = "0.1.0"
-description = "Project 3 Starter Code"
+description = "Project 3 Code"
 authors = [
   { name = "Your Name", email = "your.email@example.com" },
 ]
