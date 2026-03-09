@@ -8,11 +8,11 @@ from optimization.obstacles import CircularObstacle
 class PlannerParams:
     """Parameters for the minimum-time planner."""
     ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
-    N: int = 100
-    v_min: float = -0.1
-    v_max: float = 1.0
-    omega_min: float = -2.0
-    omega_max: float = 2.0
+    N: int = 1000
+    v_min: float = -5.0
+    v_max: float = 5.0
+    omega_min: float = -5.0
+    omega_max: float = 5.0
     dt_min: float = 0.01
     dt_max: float = 1.0
     obstacle_buffer: float = 0.1
@@ -22,13 +22,13 @@ class PlannerParams:
 class TrackingParams:
     """Parameters for the quadratic-cost tracking planner."""
     ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
-    N: int = 100
+    N: int = 300               # Increased so total time is 15.0 seconds!
     dt: float = 0.1
-    v_min: float = -0.1
-    v_max: float = 1.0
-    omega_min: float = -2.0
-    omega_max: float = 2.0
-    obstacle_buffer: float = 0.1
+    v_min: float = 0.0         # Good, no reverse for tracking
+    v_max: float = 0.2        # Physical limit of Turtlebot
+    omega_min: float = -0.25    # Physical limit of Turtlebot
+    omega_max: float = 0.25
+    obstacle_buffer: float = 2
     Q: np.ndarray = field(default_factory=lambda: np.diag([1.0, 1.0, 0.5]))
     R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
     # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
@@ -136,6 +136,35 @@ class UnicyclePlanner:
 # ──────────────────────────────────────────────────────────────────────────────
 # Option 2: Quadratic tracking-cost planner
 # ──────────────────────────────────────────────────────────────────────────────
+def generate_sine_guess(N, dt, amplitude=0.5, distance=2.0):
+    """
+    Generates a kinematic-feasible sine wave trajectory for an MPC warm start.
+    N: Horizon length
+    dt: Time step
+    amplitude: How wide the curve is (adjust this to clear your obstacle!)
+    distance: The 2-meter length of the maneuver
+    """
+    # 1. Generate x coordinates from 0 to distance
+    x_guess = np.linspace(0, distance, N)
+    
+    # 2. Generate y coordinates using the sine function
+    # At x=0, y=0. At x=2.0, y=sin(pi)=0.
+    y_guess = amplitude * np.sin((np.pi / distance) * x_guess)
+    
+    # 3. Calculate heading (theta) based on the tangent of the curve
+    # The derivative of the sine wave gives us the slope (dy/dx)
+    dy_dx = amplitude * (np.pi / distance) * np.cos((np.pi / distance) * x_guess)
+    theta_guess = np.arctan(dy_dx)
+    
+    # 4. Guess a constant forward velocity to finish in exactly N*dt seconds
+    v_guess = np.full(N, distance / (N * dt))
+    
+    # 5. Calculate angular velocity (omega) as the rate of change of theta
+    omega_guess = np.zeros(N)
+    omega_guess[:-1] = np.diff(theta_guess) / dt
+    omega_guess[-1] = omega_guess[-2] # copy last value to maintain array size
+    
+    return x_guess, y_guess, theta_guess, v_guess, omega_guess
 
 class UnicycleTrackingPlanner:
     """Fixed-horizon quadratic tracking cost planner.
@@ -155,6 +184,32 @@ class UnicycleTrackingPlanner:
         goal: tuple[float, float, float],
         obstacles: list[CircularObstacle] | None = None,
     ) -> PlannerResult:
+        
+        def generate_linear_guess(start, goal, N, dt):
+            """
+            Generates a straight-line initial guess from start to goal.
+            States are size N+1, Controls are size N.
+            """
+            x0, y0, _ = start
+            xf, yf, _ = goal
+            
+            # 1. Linear interpolation for X and Y (N+1 points)
+            x_guess = np.linspace(x0, xf, N + 1)
+            y_guess = np.linspace(y0, yf, N + 1)
+            
+            # 2. Constant heading pointing directly at the goal (N+1 points)
+            heading = np.arctan2(yf - y0, xf - x0)
+            theta_guess = np.full(N + 1, heading)
+            
+            # 3. Constant velocity to reach the goal exactly at the end of the horizon (N points)
+            distance = np.hypot(xf - x0, yf - y0)
+            v_guess = np.full(N, distance / (N * dt))
+            
+            # 4. Zero angular velocity for a straight line (N points)
+            omega_guess = np.zeros(N)
+            
+            return x_guess, y_guess, theta_guess, v_guess, omega_guess
+
         p = self.params
         N = p.N
         dt = p.dt
@@ -174,6 +229,19 @@ class UnicycleTrackingPlanner:
         #P = ca.DM(p.P)  # Terminal cost weight (can be tuned separately if desired)
 
         cost = (X[:,:-1] - xf).T @ Q @ (X[:,:-1] - xf) + U.T @ R @ U + (X[:, -1] - xf).T @ P @ (X[:, -1] - xf) # Terminal cost with P matrix
+
+        # cost = 0
+        # for k in range(N):
+        #     e = X[:, k] - xf
+        #     u = U[:, k]
+        #     # cost += ca.mtimes([e.T, Q, e]) + ca.mtimes([u.T, R, u])
+        #     cost += ca.mtimes(ca.mtimes(e.T, Q), e) + ca.mtimes(ca.mtimes(u.T, R), u)
+        
+        # eN = X[:, N] - xf
+        # # cost += ca.mtimes([eN.T, P, eN])  # Terminal cost
+        # cost += ca.mtimes(ca.mtimes(eN.T, P), eN)  # Terminal cost with P matrix
+        # import pdb; pdb.set_trace()
+        opti.minimize(cost)
 
         ## TODO: Dynamics constraints — Euler integration (dt is fixed here)
 
@@ -204,10 +272,24 @@ class UnicycleTrackingPlanner:
             r = obs.radius
             opti.subject_to((X[0,:] - cx) ** 2 + (X[1, :] - cy) ** 2 >= (r + p.obstacle_buffer) ** 2)
 
+        # init guess
+        x_g, y_g, th_g, v_g, w_g = generate_linear_guess(start, goal, N, dt)
+
+        # Set the initial guess for the states
+        opti.set_initial(X[0, :], x_g)
+        opti.set_initial(X[1, :], y_g)
+        opti.set_initial(X[2, :], th_g)
+
+        # Set the initial guess for the controls
+        opti.set_initial(U[0, :], v_g)
+        opti.set_initial(U[1, :], w_g)
+                                        
+        
+
         opti.solver(
             "ipopt",
             {"expand": True},
-            {"max_iter": 3000, "print_level": 5},
+            {"max_iter": 5000, "print_level": 5},
         )
 
         total_time = N * dt

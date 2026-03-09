@@ -47,14 +47,15 @@ def main():
     print(f"Solving with N={args.N}, mode={args.mode} ...")
     result = planner.solve(start, goal, obstacles)
 
-    if result.success:
-        print(f"Success! Total time T = {result.total_time:.4f} s, dt = {result.dt:.6f} s")
-    else:
-        print(f"Solver failed. Debug trajectory T = {result.total_time:.4f} s")
-
     plot_trajectory(result, obstacles, buf)
 
-    save_trajectory(result, f"optimization_trajectory_{args.scene}_{args.mode}")
-
+    if result.success:
+        print(f"Success! Total time T = {result.total_time:.4f} s, dt = {result.dt:.6f} s")
+        # ONLY save if the solver actually found a valid path
+        save_trajectory(result, f"optimization_trajectory_{args.scene}_{args.mode}")
+    else:
+        print(f"Solver failed. Debug trajectory T = {result.total_time:.4f} s")
+        print("❌ WARNING: Optimization failed! The .npz file was NOT updated. Check your planner constraints.")
+        
 if __name__ == "__main__":
     main()
