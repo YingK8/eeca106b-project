@@ -35,6 +35,8 @@ class TrackingParams:
     P: np.ndarray = field(default_factory=lambda: np.diag([10.0, 10.0, 5.0]))
     # Force zero angular velocity for the first N steps to avoid an initial spin-in-place.
     num_no_turn_steps: int = 1
+
+@dataclass
 class PlannerResult:
     success: bool
     x: np.ndarray = field(default_factory=lambda: np.array([]))
