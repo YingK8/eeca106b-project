@@ -33,8 +33,8 @@ class TrackingParams:
     R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
     # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
     P: np.ndarray = field(default_factory=lambda: np.diag([10.0, 10.0, 5.0]))
-
-@dataclass
+    # Force zero angular velocity for the first N steps to avoid an initial spin-in-place.
+    num_no_turn_steps: int = 1
 class PlannerResult:
     success: bool
     x: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -273,7 +273,10 @@ class UnicycleTrackingPlanner:
         opti.subject_to(opti.bounded(p.v_min, U[0, :], p.v_max))
         opti.subject_to(opti.bounded(p.omega_min, U[1, :], p.omega_max))
 
-        ## TODO: Obstacle avoidance — keep all nodes outside each obstacle
+        ## No initial turn: force zero angular velocity for the first step(s)
+        ## so the robot moves forward first instead of spinning in place.
+        if p.num_no_turn_steps > 0:
+            opti.subject_to(U[1, : p.num_no_turn_steps] == 0)
 
         for obs in obstacles:
             cx, cy = obs.cx, obs.cy
