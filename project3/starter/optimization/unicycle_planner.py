@@ -24,7 +24,7 @@ class TrackingParams:
     ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
     N: int = 300               # Increased so total time is 15.0 seconds!
     dt: float = 0.1
-    v_min: float = 0.0         # Good, no reverse for tracking
+    v_min: float = -0.2        # Good, no reverse for tracking
     v_max: float = 0.2        # Physical limit of Turtlebot
     omega_min: float = -0.25    # Physical limit of Turtlebot
     omega_max: float = 0.25
@@ -228,7 +228,7 @@ class UnicycleTrackingPlanner:
         # P = Q + A.T @ P @ A - A.T @ P @ B @ ca.inv(R + B.T @ P @ B) @ B.T @ P @ A  # LQR terminal cost
         #P = ca.DM(p.P)  # Terminal cost weight (can be tuned separately if desired)
 
-        cost = (X[:,:-1] - xf).T @ Q @ (X[:,:-1] - xf) + U.T @ R @ U + (X[:, -1] - xf).T @ P @ (X[:, -1] - xf) # Terminal cost with P matrix
+        # cost = (X[:,:-1] - xf).T @ Q @ (X[:,:-1] - xf) + U.T @ R @ U + (X[:, -1] - xf).T @ P @ (X[:, -1] - xf) # Terminal cost with P matrix
 
         # cost = 0
         # for k in range(N):
@@ -240,8 +240,17 @@ class UnicycleTrackingPlanner:
         # eN = X[:, N] - xf
         # # cost += ca.mtimes([eN.T, P, eN])  # Terminal cost
         # cost += ca.mtimes(ca.mtimes(eN.T, P), eN)  # Terminal cost with P matrix
-        # import pdb; pdb.set_trace()
+        # # import pdb; pdb.set_trace()
+        diff_x = X[:, :-1] - xf  # (3, N)
+        state_cost = ca.sum1(ca.sum2(diff_x * (Q @ diff_x)))  # sum over k of (x_k - xf)' Q (x_k - xf)
+        control_cost = ca.sum1(ca.sum2(U * (R @ U)))         # sum over k of u_k' R u_k
+        term_diff = X[:, -1] - xf
+        terminal_cost = (term_diff.T @ P) @ term_diff
+        cost = state_cost + control_cost + terminal_cost
+
         opti.minimize(cost)
+        
+        # opti.minimize(cost)
 
         ## TODO: Dynamics constraints — Euler integration (dt is fixed here)
 

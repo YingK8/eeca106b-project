@@ -11,7 +11,10 @@
 .build/
 .install/
 .log/
-
+*/venv/*
+*venv*
+.venv/
+*/venv/Lib/site-packages/
 
 # macOS artifacts
 __MACOSX/

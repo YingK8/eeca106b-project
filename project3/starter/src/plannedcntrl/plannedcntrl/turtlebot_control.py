@@ -95,7 +95,7 @@ class TurtleBotController(Node):
             
             # 2. Set the velocities (Turtlebots drive forward on X, and rotate around Z)
             cmd_msg.linear.x = float(v)
-            cmd_msg.angular.z = -float(omega)
+            cmd_msg.angular.z = float(omega)
             
             # 3. Publish the command to /cmd_vel
             self.pub.publish(cmd_msg)

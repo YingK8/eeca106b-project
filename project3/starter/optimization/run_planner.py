@@ -52,6 +52,7 @@ def main():
     if result.success:
         print(f"Success! Total time T = {result.total_time:.4f} s, dt = {result.dt:.6f} s")
         # ONLY save if the solver actually found a valid path
+        #import pdb; pdb.set_trace()
         save_trajectory(result, f"optimization_trajectory_{args.scene}_{args.mode}")
     else:
         print(f"Solver failed. Debug trajectory T = {result.total_time:.4f} s")
