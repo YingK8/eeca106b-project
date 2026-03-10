@@ -24,11 +24,11 @@ class TrackingParams:
     ## TODO: for getting a viable trajectory on the Turtlebot you may need to edit these values or add entirely new parameters
     N: int = 300               # Increased so total time is 15.0 seconds!
     dt: float = 0.1
-    v_min: float = -0.2        # Good, no reverse for tracking
-    v_max: float = 0.2        # Physical limit of Turtlebot
-    omega_min: float = -0.25    # Physical limit of Turtlebot
-    omega_max: float = 0.25
-    obstacle_buffer: float = 2
+    v_min: float = -0.00        # Good, no reverse for tracking
+    v_max: float = 0.1        # Physical limit of Turtlebot
+    omega_min: float = -0.2    # Physical limit of Turtlebot
+    omega_max: float = 0.2
+    obstacle_buffer: float = 20
     Q: np.ndarray = field(default_factory=lambda: np.diag([1.0, 1.0, 0.5]))
     R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
     # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
@@ -283,6 +283,7 @@ class UnicycleTrackingPlanner:
         for obs in obstacles:
             cx, cy = obs.cx, obs.cy
             r = obs.radius
+            print(f"Adding obstacle avoidance constraint for obstacle at ({cx}, {cy}) with obstacle buffer {p.obstacle_buffer}...")
             opti.subject_to((X[0,:] - cx) ** 2 + (X[1, :] - cy) ** 2 >= (r + p.obstacle_buffer) ** 2)
 
         # init guess

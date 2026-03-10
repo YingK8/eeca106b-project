@@ -23,7 +23,7 @@ def main():
         help="Planner mode: 'min_time' (minimize T) or 'tracking' (quadratic LQR cost)",
     )
     parser.add_argument("--scene", type=str, default="default", help="Obstacle scene to use: 'default' or 'cory105'")
-    parser.add_argument("--obstacle_buffer", type=float, default=0.1, help="Obstacle buffer")
+    parser.add_argument("--obstacle_buffer", type=float, default=0.2, help="Obstacle buffer")
     args = parser.parse_args()
 
     if args.scene == "default":
