@@ -86,10 +86,28 @@ class TurtleBotController(Node):
         """
         Follow the generated trajectory by executing the computed controls (v, omega).
         """
-        ### TODO: Implement trajectory following code here ###
+        self.get_logger().info(f"Starting trajectory execution. Total time: {float(result.total_time):.2f}s")
+
+        # Iterate through the pre-computed velocity commands
+        for v, omega in zip(result.v, result.omega):
+            # 1. Create the velocity command message
+            cmd_msg = Twist()
+            
+            # 2. Set the velocities (Turtlebots drive forward on X, and rotate around Z)
+            cmd_msg.linear.x = float(v)
+            cmd_msg.angular.z = float(omega)
+            
+            # 3. Publish the command to /cmd_vel
+            self.pub.publish(cmd_msg)
+            
+            # 4. Sleep for the time step duration
+            time.sleep(float(result.dt))
             
         # Stop the robot after trajectory is done
-        self.pub.publish(Twist())
+        stop_msg = Twist()
+        stop_msg.linear.x = 0.0
+        stop_msg.angular.z = 0.0
+        self.pub.publish(stop_msg)
         self.get_logger().info("Trajectory finished.")
 
     # ------------------------------------------------------------------
@@ -119,7 +137,7 @@ def main(args=None):
     rclpy.init(args=args)
     
     # You can change the file name to load different trajectories
-    trajectory_filename = ".../optimization_trajectory_cory105_min_time.npz"
+    trajectory_filename = "./optimization_trajectory_cory105_tracking.npz"  # TODO: set this to the trajectory you want to follow
 
     node = TurtleBotController(trajectory_filename=trajectory_filename)
     rclpy.spin(node)
