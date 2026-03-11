@@ -4,7 +4,7 @@ import math
 
 from optimization.obstacles import default_obstacle_scene, cory105_obstacle_scene
 from optimization.unicycle_planner import (
-    UnicyclePlanner, PlannerParams,
+    TrackingParamsDefault, UnicyclePlanner, PlannerParams,
     UnicycleTrackingPlanner, TrackingParams,
 )
 from optimization.plot_trajectory import plot_trajectory
@@ -36,12 +36,12 @@ def main():
         obstacles = cory105_obstacle_scene()
 
     if args.mode == "tracking":
-        params = TrackingParams(N=args.N, obstacle_buffer=args.obstacle_buffer)
-        planner = UnicycleTrackingPlanner(params)
+        params = TrackingParams(N=args.N, obstacle_buffer=args.obstacle_buffer) if args.scene=="cory105" else TrackingParamsDefault(N=args.N, obstacle_buffer=args.obstacle_buffer)
+        planner = UnicycleTrackingPlanner(params,scene=args.scene)
         buf = params.obstacle_buffer
     else:
         params = PlannerParams(N=args.N, obstacle_buffer=args.obstacle_buffer)
-        planner = UnicyclePlanner(params)
+        planner = UnicyclePlanner(params, scene=args.scene)
         buf = params.obstacle_buffer
 
     print(f"Solving with N={args.N}, mode={args.mode} ...")

@@ -37,6 +37,22 @@ class TrackingParams:
     num_no_turn_steps: int = 1
 
 @dataclass
+class TrackingParamsDefault:
+    """Parameters for the quadratic-cost tracking planner."""
+    N: int = 100
+    dt: float = 0.1
+    v_min: float = -0.1
+    v_max: float = 1.0
+    omega_min: float = -2.0
+    omega_max: float = 2.0
+    obstacle_buffer: float = 0.1
+    Q: np.ndarray = field(default_factory=lambda: np.diag([1.0, 1.0, 0.5]))
+    R: np.ndarray = field(default_factory=lambda: np.diag([1.0, 0.5]))
+    # Add this line - DEFAULT P matrix for terminal cost, can be tuned separately if desired
+    P: np.ndarray = field(default_factory=lambda: np.diag([10.0, 10.0, 5.0]))
+    num_no_turn_steps: int = 1
+
+@dataclass
 class PlannerResult:
     success: bool
     x: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -63,8 +79,9 @@ class UnicyclePlanner:
         dt = T / N   — derived per-step timestep
     """
 
-    def __init__(self, params: PlannerParams | None = None):
+    def __init__(self, params: PlannerParams | None = None, scene: str = "default"):
         self.params = params or PlannerParams()
+        self.scene = scene
 
     def solve(
         self,
@@ -176,8 +193,9 @@ class UnicycleTrackingPlanner:
 
     """
 
-    def __init__(self, params: TrackingParams | None = None):
-        self.params = params or TrackingParams()
+    def __init__(self, params: TrackingParams | None = None, scene:str = "default"):
+        default_param_ = TrackingParamsDefault() if scene == "default" else TrackingParams()  # Create an instance of the default parameters
+        self.params = params or default_param_  # Use the provided params or fall back to the default parameters
 
     def solve(
         self,

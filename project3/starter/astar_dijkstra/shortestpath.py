@@ -59,7 +59,7 @@ def shortestpath(map_data, start, goal):
         cell = numbertocell([mx, my], current_node)
         neighbors = [
             (cell[0] + dx, cell[1] + dy)
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, 1), (-1, -1), (1, 1), (1, -1)]
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
         ]
         valid_neighbors = []
         for neighbor in neighbors:
