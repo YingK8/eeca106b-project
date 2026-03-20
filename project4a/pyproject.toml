@@ -1,0 +1,14 @@
+[project]
+name = "project4a"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dm-control>=1.0.38",
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "mediapy>=1.2.6",
+    "mujoco>=3.6.0",
+    "robot-descriptions>=1.23.0",
+]

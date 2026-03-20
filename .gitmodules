@@ -1,0 +1,3 @@
+[submodule "project4a/mujoco_menagerie"]
+	path = project4a/mujoco_menagerie
+	url = https://github.com/YardenGoraly/mujoco_menagerie.git
