@@ -1,3 +1,0 @@
-[console_scripts]
-run_astar_dijkstra = astar_dijkstra.run_sim:main
-run_planner = optimization.run_planner:main

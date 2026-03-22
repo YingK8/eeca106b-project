@@ -1,3 +1,0 @@
-[console_scripts]
-turtlebot_control = plannedcntrl.turtlebot_control:main
-
