@@ -1,0 +1,37 @@
+[0.629s] Invoking command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/plannedcntrl build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/install.log --single-version-externally-managed install_data
+[0.823s] running egg_info
+[0.824s] creating build/plannedcntrl/plannedcntrl.egg-info
+[0.825s] writing build/plannedcntrl/plannedcntrl.egg-info/PKG-INFO
+[0.828s] writing dependency_links to build/plannedcntrl/plannedcntrl.egg-info/dependency_links.txt
+[0.830s] writing entry points to build/plannedcntrl/plannedcntrl.egg-info/entry_points.txt
+[0.831s] writing requirements to build/plannedcntrl/plannedcntrl.egg-info/requires.txt
+[0.833s] writing top-level names to build/plannedcntrl/plannedcntrl.egg-info/top_level.txt
+[0.835s] writing manifest file 'build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+[0.837s] reading manifest file 'build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+[0.839s] writing manifest file 'build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+[0.840s] running build
+[0.840s] running build_py
+[0.841s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build
+[0.842s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib
+[0.843s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib/plannedcntrl
+[0.844s] copying plannedcntrl/__init__.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib/plannedcntrl
+[0.847s] copying plannedcntrl/turtlebot_control.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib/plannedcntrl
+[0.850s] running install
+[0.850s] running install_lib
+[0.853s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl
+[0.854s] copying /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib/plannedcntrl/__init__.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl
+[0.857s] copying /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build/lib/plannedcntrl/turtlebot_control.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl
+[0.863s] byte-compiling /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl/__init__.py to __init__.cpython-310.pyc
+[0.867s] byte-compiling /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl/turtlebot_control.py to turtlebot_control.cpython-310.pyc
+[0.873s] running install_data
+[0.873s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/share/ament_index
+[0.874s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/share/ament_index/resource_index
+[0.875s] creating /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/share/ament_index/resource_index/packages
+[0.876s] copying resource/plannedcntrl -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/share/ament_index/resource_index/packages
+[0.879s] copying package.xml -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/share/plannedcntrl
+[0.882s] running install_egg_info
+[0.887s] Copying build/plannedcntrl/plannedcntrl.egg-info to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl-0.0.0-py3.10.egg-info
+[0.915s] running install_scripts
+[0.953s] Installing turtlebot_control script to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/plannedcntrl
+[0.956s] writing list of installed files to '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/install.log'
+[0.974s] Invoked command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl' returned '0': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/install/plannedcntrl/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/plannedcntrl build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl/build/plannedcntrl/install.log --single-version-externally-managed install_data

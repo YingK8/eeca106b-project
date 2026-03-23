@@ -1,0 +1,24 @@
+[0.769s] Invoking command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/plannedcntrl build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/install.log --single-version-externally-managed install_data
+[0.966s] running egg_info
+[0.967s] writing ../../../build/plannedcntrl/plannedcntrl.egg-info/PKG-INFO
+[0.970s] writing dependency_links to ../../../build/plannedcntrl/plannedcntrl.egg-info/dependency_links.txt
+[0.972s] writing entry points to ../../../build/plannedcntrl/plannedcntrl.egg-info/entry_points.txt
+[0.974s] writing requirements to ../../../build/plannedcntrl/plannedcntrl.egg-info/requires.txt
+[0.976s] writing top-level names to ../../../build/plannedcntrl/plannedcntrl.egg-info/top_level.txt
+[0.980s] reading manifest file '../../../build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+[0.982s] writing manifest file '../../../build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+[0.983s] running build
+[0.983s] running build_py
+[0.985s] copying plannedcntrl/turtlebot_control.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/build/lib/plannedcntrl
+[0.988s] running install
+[0.989s] running install_lib
+[0.990s] copying /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/build/lib/plannedcntrl/turtlebot_control.py -> /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl
+[0.995s] byte-compiling /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl/turtlebot_control.py to turtlebot_control.cpython-310.pyc
+[0.999s] running install_data
+[1.001s] running install_egg_info
+[1.002s] removing '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl-0.0.0-py3.10.egg-info' (and everything under it)
+[1.008s] Copying ../../../build/plannedcntrl/plannedcntrl.egg-info to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl-0.0.0-py3.10.egg-info
+[1.031s] running install_scripts
+[1.048s] Installing turtlebot_control script to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/plannedcntrl
+[1.051s] writing list of installed files to '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/install.log'
+[1.066s] Invoked command in '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/src/plannedcntrl' returned '0': PYTHONPATH=/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/install/plannedcntrl/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/plannedcntrl build --build-base /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/build install --record /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/build/plannedcntrl/install.log --single-version-externally-managed install_data

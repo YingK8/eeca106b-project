@@ -1,0 +1,19 @@
+running egg_info
+writing ../../build/plannedcntrl/plannedcntrl.egg-info/PKG-INFO
+writing dependency_links to ../../build/plannedcntrl/plannedcntrl.egg-info/dependency_links.txt
+writing entry points to ../../build/plannedcntrl/plannedcntrl.egg-info/entry_points.txt
+writing requirements to ../../build/plannedcntrl/plannedcntrl.egg-info/requires.txt
+writing top-level names to ../../build/plannedcntrl/plannedcntrl.egg-info/top_level.txt
+reading manifest file '../../build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+writing manifest file '../../build/plannedcntrl/plannedcntrl.egg-info/SOURCES.txt'
+running build
+running build_py
+running install
+running install_lib
+running install_data
+running install_egg_info
+removing '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl-0.0.0-py3.10.egg-info' (and everything under it)
+Copying ../../build/plannedcntrl/plannedcntrl.egg-info to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/install/plannedcntrl/lib/python3.10/site-packages/plannedcntrl-0.0.0-py3.10.egg-info
+running install_scripts
+Installing turtlebot_control script to /home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/install/plannedcntrl/lib/plannedcntrl
+writing list of installed files to '/home/cc/ee106b/sp26/class/ee106b-aac/eeca106b-project/project3/starter/build/plannedcntrl/install.log'
