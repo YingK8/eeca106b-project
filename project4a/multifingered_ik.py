@@ -55,51 +55,65 @@ class LevenbergMarquardtIK:
         n_targets = len(body_ids)
         nv = self.model.nv
 
-        e_r = target_orientations - self.physics.data.body_xquat[body_ids] # shape (4, n)
-        e_p = target_positions - self.physics.data.body_xpos[body_ids] # shape (3, n)
+        # Resolve body names to integer body ids once.
+        int_ids = [mj.mj_name2id(self.model.ptr, mj.mjtObj.mjOBJ_BODY, body_name) for body_name in body_ids]
 
-        e = np.vstack(e_p, e_r) # shape (7, n)
+        for i in range(n_targets):
+            body_id = int_ids[i]
+            steps_remaining = self.max_steps
 
-        while np.linalg.norm(e) >= self.tol and self.max_steps > 0:
-            self.data.qpos[:] = q
-            self.physics.forward()
+            while steps_remaining > 0:
+                self.data.qpos[:] = q
+                self.physics.forward()
 
-            mj.mj_jacBody(self.model, self.data, self.jacp, self.jacr, body_ids[0]) 
-            # see https://mujoco.readthedocs.io/en/stable/APIreference/APIfunctions.html#mj-jacbody
+                # Jacobian buffers are allocated per target, so index with i (not body_id).
+                cur_jacp = self.jacp[i]
+                cur_jacr = self.jacr[i]
+                # Get the jacobian for current body
+                mj.mj_jacBody(self.model.ptr, self.data.ptr, cur_jacp, cur_jacr, body_id)
 
-            J = np.vstack((self.jacp, self.jacr)) # shape (6, nv)
+                # Build a 6D task-space error to match [jacp; jacr].
+                e_p = target_positions[i] - self.physics.data.xpos[body_id]
+                quat_err = target_orientations[i] - self.physics.data.xquat[body_id]
+                e_r = quat_err[1:]  # use xyz part so rotational error is 3D
+                e = np.hstack((e_p, e_r))  # (6,)
 
-            # the jacobian is the derivaitve for each manipulator body, with respect to the motor joint angles. 
-            # So, you are using this to similtaneously solve for the IKs for all of the bodies!
+                # constrain the error to be more  than the tolerance. If less than, we are done. 
+                # e should be computed from the latest forward kinematics at every iteration. 
+                if np.linalg.norm(e) < self.tol:
+                    break
 
-            J_T = J.T
-            J_inv = (J_T * J )
-            delta_q = J_inv * e
-            q += self.step_size * delta_q
-            q = clip_to_valid_state(q, self.model.jnt_range)
-            e_r = target_orientations - self.physics.data.body_xquat[body_ids]
-            e_p = target_positions - self.physics.data.body_xpos[body_ids]
-            e = np.vstack(e_p, e_r)
+                J = np.vstack((cur_jacp, cur_jacr))  # (6, nv)
+                JT = J.T
+                # Levenberg-Marquardt damped least-squares update.
+                H = JT @ J + self.damping * np.eye(nv)
+                delta_q = np.linalg.solve(H, JT @ e)
+                # quaternion space = 3+4 = 7d , but nv-space is only 6d (6 dof)
+                # delta_q lives in nv-space; integrate into nq-space qpos.
+                # delta_q lives in velocity space. 
+                mj.mj_integratePos(self.model.ptr, q, self.step_size * delta_q, 1.0)
+                # use physics parameter to clip the qpos to the valid state
+                q = clip_to_valid_state(self.physics, q)
+                steps_remaining -= 1
 
-            self.max_steps -= 1
+                ## Pseudocode for the algorithm:
+                
+                # goal_pose = y
+                # q = current joint angles
+                # step_size = desired step size
+                # tolerance = set tolerance
+                # e = goal_pose - current_pose
+                # lambda = damping factor
 
-            ## Pseudocode for the algorithm:
-            
-            # goal_pose = y
-            # q = current joint angles
-            # step_size = desired step size
-            # tolerance = set tolerance
-            # e = goal_pose - current_pose
-            # lambda = damping factor
+                # while norm(e) >= tolerance do
+                #     J = Jacobian(q)
+                #     J_T = Jacobian.transpose()
+                #     J_inv = (J_T * J + lambda * I).inv() * J_T
+                #     delta_q = J_inv * e
+                #     q += step_size * delta_q
+                #     q = check_joint_limits(q)
+                #     e = goal_pose - ForwardKinematics(q)
+                # end while
 
-            # while norm(e) >= tolerance do
-            #     J = Jacobian(q)
-            #     J_T = Jacobian.transpose()
-            #     J_inv = (J_T * J + lambda * I).inv() * J_T
-            #     delta_q = J_inv * e
-            #     q += step_size * delta_q
-            #     q = check_joint_limits(q)
-            #     e = goal_pose - ForwardKinematics(q)
-            # end while
-    
+        return q
     
