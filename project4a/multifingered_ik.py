@@ -55,7 +55,12 @@ class LevenbergMarquardtIK:
         n_targets = len(body_ids)
         nv = self.model.nv
 
-        for step in range(self.max_steps):
+        e_r = target_orientations - self.physics.data.body_xquat[body_ids] # shape (4, n)
+        e_p = target_positions - self.physics.data.body_xpos[body_ids] # shape (3, n)
+
+        e = np.vstack(e_p, e_r) # shape (7, n)
+
+        while np.linalg.norm(e) >= self.tol and self.max_steps > 0:
             self.data.qpos[:] = q
             self.physics.forward()
 
@@ -64,29 +69,37 @@ class LevenbergMarquardtIK:
 
             J = np.vstack((self.jacp, self.jacr)) # shape (6, nv)
 
-            # the jacobian is the derivaitve for each of the joints with respect to the position and 
-            # orientation of the end effector.
+            # the jacobian is the derivaitve for each manipulator body, with respect to the motor joint angles. 
+            # So, you are using this to similtaneously solve for the IKs for all of the bodies!
 
             J_T = J.T
-
             J_inv = (J_T * J )
+            delta_q = J_inv * e
+            q += self.step_size * delta_q
+            q = clip_to_valid_state(q, self.model.jnt_range)
+            e_r = target_orientations - self.physics.data.body_xquat[body_ids]
+            e_p = target_positions - self.physics.data.body_xpos[body_ids]
+            e = np.vstack(e_p, e_r)
+
+            self.max_steps -= 1
+
+            ## Pseudocode for the algorithm:
             
+            # goal_pose = y
+            # q = current joint angles
+            # step_size = desired step size
+            # tolerance = set tolerance
+            # e = goal_pose - current_pose
+            # lambda = damping factor
 
-        # goal_pose = y
-        # q = current joint angles
-        # step_size = desired step size
-        # tolerance = set tolerance
-        # e = goal_pose - current_pose
-        # lambda = damping factor
-
-        # while norm(e) >= tolerance do
-        #     J = Jacobian(q)
-        #     J_T = Jacobian.transpose()
-        #     J_inv = (J_T * J + lambda * I).inv() * J_T
-        #     delta_q = J_inv * e
-        #     q += step_size * delta_q
-        #     q = check_joint_limits(q)
-        #     e = goal_pose - ForwardKinematics(q)
-        # end while
+            # while norm(e) >= tolerance do
+            #     J = Jacobian(q)
+            #     J_T = Jacobian.transpose()
+            #     J_inv = (J_T * J + lambda * I).inv() * J_T
+            #     delta_q = J_inv * e
+            #     q += step_size * delta_q
+            #     q = check_joint_limits(q)
+            #     e = goal_pose - ForwardKinematics(q)
+            # end while
     
     
