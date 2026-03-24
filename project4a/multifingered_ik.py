@@ -14,7 +14,7 @@ class LevenbergMarquardtIK:
                  jacp: np.array, 
                  jacr: np.array, 
                  damping: int, 
-                 max_steps: int, 
+                 max_steps: int,
                  physics: dm_control.mjcf.physics.Physics):
         self.model = model
         self.data = data
@@ -51,82 +51,42 @@ class LevenbergMarquardtIK:
             are possible 
         """
 
-        # TODO(1): Normalize / validate inputs.
-        # - Convert target_positions and target_orientations to np.ndarray.
-        # - Enforce shapes:
-        #     target_positions:      (n_targets, 3)
-        #     target_orientations:   (n_targets, 4) in [w, x, y, z]
-        # - Ensure len(body_ids) == n_targets.
-        # - If your class doc says 3xn / 4xn, decide on one convention and convert once here.
-
-
-
-        # TODO(2): Resolve body references to integer body ids.
-        # - body_ids may be strings (body names) or already-int ids.
-        # - If strings, resolve with: self.model.body(name).id
-        # - Keep a list/array: resolved_body_ids of length n_targets.
-
-        # TODO(3): Initialize optimization state.
-        # - q: working copy of current generalized coordinates.
-        # - nv: number of generalized velocities (dimension of Jacobian columns).
-        # - Use class params already provided in __init__:
-        #       self.step_size, self.tol, self.damping, self.max_steps, self.alpha
-        # - Typical shapes used below:
-        #       residual r: (6 * n_targets,)
-        #       Jacobian J: (6 * n_targets, nv)
         q = self.data.qpos.copy()
         n_targets = len(body_ids)
         nv = self.model.nv
 
         for step in range(self.max_steps):
+            self.data.qpos[:] = q
+            self.physics.forward()
+
+            mj.mj_jacBody(self.model, self.data, self.jacp, self.jacr, body_ids[0]) 
+            # see https://mujoco.readthedocs.io/en/stable/APIreference/APIfunctions.html#mj-jacbody
+
+            J = np.vstack((self.jacp, self.jacr)) # shape (6, nv)
+
+            # the jacobian is the derivaitve for each of the joints with respect to the position and 
+            # orientation of the end effector.
+
+            J_T = J.T
+
+            J_inv = (J_T * J )
             
 
-        # TODO(4): Main Levenberg-Marquardt loop.
-        # for step in range(self.max_steps):
-        #   a) Write q into simulator state and run forward kinematics:
-        #        self.data.qpos[:] = q
-        #        self.physics.forward()
-        #
-        #   b) Build stacked residual vector r and Jacobian J:
-        #        For each target i:
-        #          - current_pos  = self.data.xpos[body_id]
-        #          - current_quat = self.data.xquat[body_id]
-        #          - pos_err = target_positions[i] - current_pos                (3,)
-        #          - rot_err = quaternion_error_naive(current_quat, target_quat) (3,)
-        #          - r_i = [pos_err, alpha * rot_err]                            (6,)
-        #
-        #          Compute body Jacobians at current q:
-        #            mj.mj_jacBody(self.model.ptr, self.data.ptr, jacp_i, jacr_i, body_id)
-        #          where jacp_i, jacr_i have shape (3, nv).
-        #
-        #          J_i = [jacp_i;
-        #                 alpha * jacr_i]                                        (6, nv)
-        #          Insert J_i into J block for target i.
-        #
-        #   c) Check convergence using residual norm:
-        #        if np.linalg.norm(r) < self.tol: break
-        #
-        #   d) Levenberg-Marquardt update:
-        #        Solve (J^T J + lambda * I) * delta_q = J^T r
-        #        with lambda = self.damping.
-        #        Use np.linalg.solve if matrix is well-conditioned;
-        #        otherwise fallback to np.linalg.lstsq.
-        #
-        #   e) Apply step and joint-limit projection:
-        #        q_candidate = q + self.step_size * delta_q
-        #        q_candidate = clip_to_valid_state(self.physics, q_candidate)
-        #
-        #   f) Optional LM damping adaptation (recommended):
-        #        - Evaluate candidate error norm.
-        #        - If error improved: accept q_candidate, decrease lambda.
-        #        - Else: reject candidate, increase lambda.
+        # goal_pose = y
+        # q = current joint angles
+        # step_size = desired step size
+        # tolerance = set tolerance
+        # e = goal_pose - current_pose
+        # lambda = damping factor
 
-        # TODO(5): Finalize state and return q.
-        # - Set simulator state to final q and forward once if needed.
-        # - Return q with same shape as self.data.qpos.
-
-        raise NotImplementedError(
-            "TODO: Implement Levenberg-Marquardt IK using the scaffold in calculate()."
-        )
+        # while norm(e) >= tolerance do
+        #     J = Jacobian(q)
+        #     J_T = Jacobian.transpose()
+        #     J_inv = (J_T * J + lambda * I).inv() * J_T
+        #     delta_q = J_inv * e
+        #     q += step_size * delta_q
+        #     q = check_joint_limits(q)
+        #     e = goal_pose - ForwardKinematics(q)
+        # end while
     
     
