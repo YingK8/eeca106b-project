@@ -92,8 +92,10 @@ class LevenbergMarquardtIK:
                 # delta_q lives in nv-space; integrate into nq-space qpos.
                 # delta_q lives in velocity space. 
                 mj.mj_integratePos(self.model.ptr, q, self.step_size * delta_q, 1.0)
+                
                 # use physics parameter to clip the qpos to the valid state
                 q = clip_to_valid_state(self.physics, q)
+                
                 steps_remaining -= 1
 
                 ## Pseudocode for the algorithm:

@@ -31,9 +31,35 @@ def synthesize_grasp(env: grasp_synthesis.AllegroHandEnv,
     ------
     New joint angles after contact and force closure adjustment
     """
+    
+    # Require: qh, max iter, λ
+    #     iter ← 0
+    #     qh ← init configuration
+    #     in contact = False
+    #     while iter < max iter do
+        #     if all fingers touching then
+        #       made contact ← True
+        #     end if
+        #     f ← joint space objective
+        #     qnew
+        #     h = qh − λ∇qh f (qh)
+        #     improvement ← f (qh) − f (qnew
+        #     h )
+        #     if improvement > 0 then
+            #     qh ← qnew
+            #     h
+            #     if improvement < 1e−6 then
+            #       break
+            #     end if
+        #     end if
+        #     end while
+    #     return qh
+    
     q_h = q_h_init.copy()
-    for it in range(max_iters):
-        in_contact = False
+    in_contact = False
+    
+    for iter in range(max_iters):
+        
         if env.physics.data.ncon >= 4:
             geom_id_pairs = env.physics.data.ptr.contact.geom
             # Get list of contact pair geoms
@@ -56,30 +82,33 @@ def synthesize_grasp(env: grasp_synthesis.AllegroHandEnv,
                     env.physics.data.ptr.contact.frame.shape[0] >= 4):
                 in_contact = True
         
-        # Evaluate the objective function and check its gradient
-        fval = joint_space_objective(env, q_h, fingertip_names, in_contact)
-        grad = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
-
-        # Update the joint configuration
-        q_h_new = q_h.copy() - lr*grad
+        # Evaluate the objective function
+        f = joint_space_objective(env, q_h, fingertip_names, in_contact)
         
-        # Clip joint configuration to be in bounds
-        q_h_new = clip_to_valid_state(env.physics, q_h_new, env.q_h_slice, 16)
+        # Update the joint configuration
+        grad_f = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
+        q_h_new = q_h.copy() - lr*grad_f 
+
+        # Clip in full qpos space so MuJoCo joint indices/ranges are applied correctly.
+        qpos_full = env.physics.data.qpos.copy()
+        qpos_full[env.q_h_slice] = q_h_new
+        qpos_full = clip_to_valid_state(env.physics, qpos_full)
+        q_h_new = qpos_full[env.q_h_slice].copy()
 
         # Evaluate the objective function with the new joint configuration to measure improvement
-        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
+        f_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
 
         # Only update q_h if the objective function has improved
-        if fval_new < fval:
+        if f_new < f:
             q_h = q_h_new
-            improvement = fval - fval_new 
-            print(f"Iter {it}, objective={fval_new:.4f}, improvement={improvement:.4f}")
+            improvement = f - f_new 
+            print(f"Iter {iter}, objective={f_new:.4f}, improvement={improvement:.4f}")
             if improvement < 1e-6:
                 break
         else:
             # If no improvement, reduce lr or break
             lr *= 0.5
-            print(f"Iter {it}, no improvement, reduce lr to {lr}")
+            print(f"Iter {iter}, no improvement, reduce lr to {lr}")
             if lr < 1e-6:
                 break
     return q_h
@@ -111,6 +140,21 @@ def joint_space_objective(env: grasp_synthesis.AllegroHandEnv,
     ------
     fc_loss + (beta * d) as written in algorithm 2
     """
+    # Require: qh, β, fingertip positions, in contact, Q plus thresh
+    # D = get total dist from sphere(positions)
+    # if not in contact then return βD
+    # else
+        # normals ← get contact normals()
+        # F C ← build discrete friction cone(normals)
+        # G ← build grasp map(FC)
+        # fc loss ← optimize necessary condition(G)
+        # if fc loss < Q plus thresh then
+        #   fc loss ← optimize sufficient condition(G)
+        # end if
+        # return fc loss + βD
+    # end if
+
+
     env.set_configuration(q_h)
     finger_positions = env.get_body_positions(fingertip_names)
 
