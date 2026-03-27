@@ -200,7 +200,18 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     ------
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
-    #YOUR CODE HERE
+    n = normal[0:3]
+    tangent_1 = normal[3:6]
+    tangent_2 = normal[6:9]
+    
+    friction_cones_vecs = []
+    for angle in np.linspace(0, 2*np.pi, num_approx, endpoint=False):
+        # Tangential component
+        tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
+        # Friction cone force: normal + scaled tangent
+        f = n + mu * tangent_f
+        friction_cones_vecs.append(f / np.linalg.norm(f))  # normalize
+    return np.array(friction_cones_vecs)
 
 
 def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zeros(3)):
@@ -215,7 +226,18 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
-    #YOUR CODE HERE
+    G_list = []
+    for i, contact_point in enumerate(positions):
+        r = contact_point - origin
+        
+        for cone_direction_f in friction_cones[i]:
+            torque = np.cross(r, cone_direction_f)
+            wrench = np.hstack([cone_direction_f, torque])
+            G_list.append(wrench)
+    
+    G = np.column_stack(G_list)
+    return G
+            
 
 def optimize_necessary_condition(G: np.array, env: grasp_synthesis.AllegroHandEnv):
     """
