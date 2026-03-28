@@ -54,32 +54,27 @@ def synthesize_grasp(env: grasp_synthesis.AllegroHandEnv,
         #     end if
         #     end while
     #     return qh
+    # Input validation
+    if q_h_init is None or len(q_h_init) == 0:
+        raise ValueError("q_h_init cannot be empty")
+    if max_iters <= 0:
+        raise ValueError("max_iters must be positive")
+    if lr <= 0:
+        raise ValueError("learning rate must be positive")
     
     q_h = q_h_init.copy()
     in_contact = False
     
     for iter in range(max_iters):
         
+        # Check if all four fingertips are in contact with the object
+        # Use the environment's contact detection which properly filters for ball contacts
         if env.physics.data.ncon >= 4:
-            geom_id_pairs = env.physics.data.ptr.contact.geom
-            # Get list of contact pair geoms
-            geoms = np.array([
-                [
-                    mj.mj_id2name(env.physics.model.ptr, mj.mjtObj.mjOBJ_GEOM, geom_id)
-                    for geom_id in pair
-                ]
-                for pair in geom_id_pairs
-            ])
-
-            # Specify the exact geom contacts we're looking for (if you change the allegro hand urdf you might want to check that these still correspond to the fingertips)
-            one   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_12']
-            two   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_23']
-            three = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_34']
-            four  = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_45']
-
-            # Check if all four fingertips are touching the object
-            if (one in geoms and two in geoms and three in geoms and four in geoms and
-                    env.physics.data.ptr.contact.frame.shape[0] >= 4):
+            contact_normals, contact_positions = env.get_contact_normals_and_positions(
+                env.physics.data.contact
+            )
+            # If we have 4+ valid contacts with the ball, we have contact
+            if len(contact_positions) >= 4:
                 in_contact = True
         
         # Evaluate the objective function
@@ -163,18 +158,30 @@ def joint_space_objective(env: grasp_synthesis.AllegroHandEnv,
     for p in finger_positions:
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
         surface_penalty += d*d
-    if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
+    if not in_contact:
         return beta * surface_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
         # Create friction cone
-        contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
+        try:
+            contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.contact)
+        except (IndexError, ValueError) as e:
+            print(f"Error getting contact information: {e}")
+            return float('inf')
+        
+        if len(contact_frames) == 0:
+            return beta * surface_penalty
+        
         directions_list = []
         for i in range(len(contact_frames)):
             contact_frame = contact_frames[i]
             directions_i = build_friction_cone(contact_frame, friction_coeff, num_friction_cone_approx)
             directions_list.append(directions_i)
 
-        G = build_grasp_matrix(contact_positions, directions_list, origin=env.sphere_center)
+        try:
+            G = build_grasp_matrix(contact_positions, directions_list, origin=env.sphere_center)
+        except (ValueError, IndexError) as e:
+            print(f"Error building grasp matrix: {e}")
+            return float('inf')
 
         # First optimize Q+ distance until it's near zero, then switch to optimizing Q- distance
         Q_plus_dist = optimize_necessary_condition(G, env)
@@ -200,6 +207,13 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     ------
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
+    if normal.shape[0] < 9:
+        raise ValueError(f"normal must have at least 9 elements, got {normal.shape[0]}")
+    if mu < 0:
+        raise ValueError("Friction coefficient mu must be non-negative")
+    if num_approx < 1:
+        raise ValueError("num_approx must be at least 1")
+    
     n = normal[0:3]
     tangent_1 = normal[3:6]
     tangent_2 = normal[6:9]
@@ -210,7 +224,11 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
         tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
         # Friction cone force: normal + scaled tangent
         f = n + mu * tangent_f
-        friction_cones_vecs.append(f / np.linalg.norm(f))  # normalize
+        norm_f = np.linalg.norm(f)
+        if norm_f > 0:
+            friction_cones_vecs.append(f / norm_f)  # normalize
+        else:
+            friction_cones_vecs.append(f)
     return np.array(friction_cones_vecs)
 
 
@@ -226,6 +244,11 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
+    if len(positions) == 0 or len(friction_cones) == 0:
+        raise ValueError("positions and friction_cones cannot be empty")
+    if len(positions) != len(friction_cones):
+        raise ValueError(f"Number of positions ({len(positions)}) must match number of friction cones ({len(friction_cones)})")
+    
     G_list = []
     for i, contact_point in enumerate(positions):
         r = contact_point - origin
@@ -234,6 +257,9 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
             torque = np.cross(r, cone_direction_f)
             wrench = np.hstack([cone_direction_f, torque])
             G_list.append(wrench)
+    
+    if len(G_list) == 0:
+        raise ValueError("No wrenches generated from friction cones")
     
     G = np.column_stack(G_list)
     return G
@@ -248,7 +274,26 @@ def optimize_necessary_condition(G: np.array, env: grasp_synthesis.AllegroHandEn
     G: grasp matrix
     env: AllegroHandEnv instance (can use to access physics)
     """
-    #YOUR CODE HERE
+    # Q+ distance: min ||G alpha||_2 subject to alpha in simplex.
+    n_dirs = G.shape[1]
+
+    def f_objective(alpha):
+        return np.linalg.norm(G @ alpha)
+
+    x0 = np.ones(n_dirs) / n_dirs
+    constraints = ({'type': 'eq', 'fun': lambda a: np.sum(a) - 1.0},)
+    bounds = [(0.0, None)] * n_dirs
+
+    result = minimize(
+        f_objective,
+        x0=x0,
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints,
+    )
+    if not result.success:
+        return float('inf')
+    return float(result.fun)
 
 def optimize_sufficient_condition(G: np.array, M=20):
     """
@@ -259,6 +304,42 @@ def optimize_sufficient_condition(G: np.array, M=20):
     G: grasp matrix
     M: number of approximations to the norm ball
 
-    Returns the Q- distance
+    Returns the Q- distance. Negative values indicate force-closure sufficiency.
     """
-    #YOUR CODE HERE
+
+    n_dirs = G.shape[1]
+
+    # Variables are x = [alpha_1 ... alpha_N, r].
+    # We solve d_Q^-(k) = min -r, s.t. G alpha = r q_k, sum(alpha)=1, alpha>=0, r>=0.
+    
+    c = np.zeros(n_dirs + 1) #  the objective function c' * x = [0 * alpha_1 ... 0 * alpha_N, -r] = [0 ... 0, -r]
+    c[-1] = -1.0 # -r
+    bounds = [(0.0, None)] * (n_dirs + 1) # alpha_1 ... alpha_N, r all needs to be non-negative
+
+    # generate M = 20 random unit vectors to present the unit ball
+    rng = np.random.default_rng(0)
+    rand_directions = rng.normal(size=(M, 6))
+    norms = np.linalg.norm(rand_directions, axis=1, keepdims=True)
+    # safety precaution: prevents division by 0, in case the rng generates a 0 vector
+    norms[norms == 0.0] = 1.0
+    rand_directions = rand_directions / norms
+
+    d_k_values = []
+    for q_k in rand_directions:
+        A_eq = np.zeros((7, n_dirs + 1))
+        A_eq[:6, :n_dirs] = G
+        A_eq[:6, -1] = -q_k
+        A_eq[6, :n_dirs] = 1.0
+        b_eq = np.zeros(7)
+        b_eq[6] = 1.0
+
+        result = linprog(c=c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+        if result.success:
+            d_k_values.append(float(result.fun))
+        else:
+            # Infeasible direction => no positive interior radius along this ray.
+            d_k_values.append(0.0)
+
+    if not d_k_values or len(d_k_values) == 0:
+        return 0.0  # Return 0 instead of inf (no force closure)
+    return float(np.max(d_k_values))
