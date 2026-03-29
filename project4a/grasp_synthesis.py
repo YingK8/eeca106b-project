@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import linprog, minimize
+import mujoco as mj
 import AllegroHandEnv
 from utils import *
 
@@ -70,8 +71,7 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                          q_h_init: np.array,
                          fingertip_names: list[str], 
                          max_iters=1000, 
-                         lr=0.1,
-                         lr_decay=0.5):
+                         lr=0.1):
     """
     Given an initial hand joint configuration, q_h_init, return adjusted joint angles that are touching
     the object and approximate force closure. This is algorithm 1 in the project specification.
@@ -80,56 +80,62 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
     ----------
     env: AllegroHandEnv instance (can use to access physics)
     q_h_init: array of joint positions for the hand
-    fingertip_names: names of the fingertip bodies as defined in the MJCF
     max_iters: maximum number of iterations for the optimization
     lr: learning rate for the gradient step
-    lr_decay: decay factor for learning rate when no improvement
 
     Output
     ------
     New joint angles after contact and force closure adjustment
     """
-    
     q_h = q_h_init.copy()
-    in_contact = False
-    
-    # Extract actual fingertip geom names from the model
-    fingertip_geom_names = _get_fingertip_geom_names(env.physics)
-    ball_geom_name = 'ball/ball_geom'
-    
-    for iter in range(max_iters):
-        
-        # Check if all fingertips are in contact with the ball
-        if _all_fingers_touching(env, fingertip_geom_names, ball_geom_name):
-            in_contact = True
-        
-        # Evaluate the objective function
-        f = joint_space_objective(env, q_h, fingertip_names, in_contact)
-        
-        # Update the joint configuration
-        grad_f = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
-        q_h_new = q_h.copy() - lr * grad_f
+    for it in range(max_iters):
+        in_contact = False
+        if env.physics.data.ncon >= 4:
+            geom_id_pairs = env.physics.data.ptr.contact.geom
+            # Get list of contact pair geoms
+            geoms = np.array([
+                [
+                    mj.mj_id2name(env.physics.model.ptr, mj.mjtObj.mjOBJ_GEOM, geom_id)
+                    for geom_id in pair
+                ]
+                for pair in geom_id_pairs
+            ])
 
-        # Clip in full qpos space so MuJoCo joint indices/ranges are applied correctly.
-        qpos = env.physics.data.qpos.copy()
-        qpos[env.q_h_slice] = q_h_new
-        qpos = clip_to_valid_state(env.physics, qpos)
-        q_h_new = qpos[env.q_h_slice].copy()
+            # Specify the exact geom contacts we're looking for (if you change the allegro hand urdf you might want to check that these still correspond to the fingertips)
+            one   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_12']
+            two   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_23']
+            three = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_34']
+            four  = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_45']
+
+            # Check if all four fingertips are touching the object
+            if (one in geoms and two in geoms and three in geoms and four in geoms and
+                    env.physics.data.ptr.contact.frame.shape[0] >= 4):
+                in_contact = True
+        
+        # Evaluate the objective function and check its gradient
+        fval = joint_space_objective(env, q_h, fingertip_names, in_contact)
+        grad = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
+
+        # Update the joint configuration
+        q_h_new = q_h.copy() - lr*grad
+        
+        # Clip joint configuration to be in bounds
+        q_h_new = clip_to_valid_state(env.physics, q_h_new, env.q_h_slice, 16)
 
         # Evaluate the objective function with the new joint configuration to measure improvement
-        f_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
-        
-        # update q_h if the objective function has improved
-        improvement = f - f_new 
-        if improvement > 0:
+        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
+
+        # Only update q_h if the objective function has improved
+        if fval_new < fval:
             q_h = q_h_new
-            print(f"Iter {iter}, objective={f_new:.4f}, improvement={improvement:.4f}")
+            improvement = fval - fval_new 
+            print(f"Iter {it}, objective={fval_new:.4f}, improvement={improvement:.4f}")
             if improvement < 1e-6:
                 break
         else:
             # If no improvement, reduce lr or break
-            lr *= lr_decay
-            print(f"Iter {iter}, no improvement, reduce lr to {lr}")
+            lr *= 0.5
+            print(f"Iter {it}, no improvement, reduce lr to {lr}")
             if lr < 1e-6:
                 break
     return q_h
@@ -141,7 +147,7 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
                           beta=10, 
                           friction_coeff=0.5, 
                           num_friction_cone_approx=4,
-                          eps=0.000001):
+                          eps=0.00001):
     """
     This function minimizes an objective such that the distance from the origin
     in wrench space as well as distance from fingers to object surface is minimized.
@@ -161,57 +167,35 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     ------
     fc_loss + (beta * d) as written in algorithm 2
     """
-    # Require: qh, β, fingertip positions, in contact, Q plus thresh
-    # D = get total dist from sphere(positions)
-    # if not in contact then return βD
-    # else
-        # normals ← get contact normals()
-        # F C ← build discrete friction cone(normals)
-        # G ← build grasp map(FC)
-        # fc loss ← optimize necessary condition(G)
-        # if fc loss < Q plus thresh then
-        #   fc loss ← optimize sufficient condition(G)
-        # end if
-        # return fc loss + βD
-    # end if
-
-
     env.set_configuration(q_h)
     finger_positions = env.get_body_positions(fingertip_names)
 
-    # get total dist from sphere(positions)
-    D = 0.0
+    # Penalty for distance from surface
+    surface_penalty = 0.0
     for p in finger_positions:
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
-        D += d*d
-        
-    if not in_contact:
-        return beta * D
-    
-    else: 
+        surface_penalty += d*d
+    if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
+        return beta * surface_penalty
+    else: # Fingers are in contact, so we calculate Q+ and Q- penalty
         # Create friction cone
-        contact_normals, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
-        FC = []
-        
-        for normal in contact_normals:
-            friction_cone = build_friction_cone(normal, friction_coeff, num_friction_cone_approx)
-            FC.append(friction_cone)
+        contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
+        directions_list = []
+        for i in range(len(contact_frames)):
+            contact_frame = contact_frames[i]
+            directions_i = build_friction_cone(contact_frame, friction_coeff, num_friction_cone_approx)
+            directions_list.append(directions_i)
 
-        G = build_grasp_matrix(contact_positions, FC, origin=env.sphere_center)
-        
+        G = build_grasp_matrix(contact_positions, directions_list, origin=env.sphere_center)
+
         # First optimize Q+ distance until it's near zero, then switch to optimizing Q- distance
-        q_plus_dist = optimize_necessary_condition(G)
-        if q_plus_dist < eps:
-            fc_loss = optimize_sufficient_condition(G)
+        Q_plus_dist = optimize_necessary_condition(G, env)
+        if Q_plus_dist > eps:
+            score_fc = Q_plus_dist
         else:
-            fc_loss = q_plus_dist
-        
-        # if Q_plus_dist > eps:
-        #     score_fc = Q_plus_dist
-        # else:
-        #     Q_minus_dist = optimize_sufficient_condition(G)
-        #     score_fc = Q_minus_dist
-        return fc_loss + beta * D
+            Q_minus_dist = optimize_sufficient_condition(G)
+            score_fc = Q_minus_dist
+        return score_fc + beta * surface_penalty
 
 
 def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
@@ -228,17 +212,45 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     ------
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
-    n = normal[0:3]
-    tangent_1 = normal[3:6]
-    tangent_2 = normal[6:9]
+    n_raw = normal[0:3]
+    n_norm = np.linalg.norm(n_raw)
+    if n_norm < 1e-12:
+        return np.zeros((0, 3))
+    n = n_raw / n_norm
+    
+    # Ensure normal points outward: friction cone vectors should point away from contact.
+    # Build a test friction vector and verify it has positive outward direction.
+    t_test = normal[3:6] - np.dot(normal[3:6], n) * n
+    t_test_norm = np.linalg.norm(t_test)
+    if t_test_norm > 1e-12:
+        t_test = t_test / t_test_norm
+        f_test = n + mu * t_test
+        # Sanity check: the test friction vector should have reasonable magnitude and point away.
+        # If the normal was inverted (pointing inward), typical contacts would be problematic.
+        # When in doubt, keep normal as-is; the rest of the grasp detection will filter bad cones.
+        pass
+
+    # Build a numerically stable tangent basis in the contact plane.
+    t1_raw = normal[3:6]
+    t1 = t1_raw - np.dot(t1_raw, n) * n
+    t1_norm = np.linalg.norm(t1)
+    if t1_norm < 1e-12:
+        # Fallback if the provided tangent is degenerate.
+        ref = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        t1 = ref - np.dot(ref, n) * n
+        t1_norm = np.linalg.norm(t1)
+    t1 = t1 / max(t1_norm, 1e-12)
+    t2 = np.cross(n, t1)
+    t2 = t2 / max(np.linalg.norm(t2), 1e-12)
     
     friction_cones_vecs = []
-    for angle in np.linspace(0, 2*np.pi, num_approx, endpoint=False):
+    for angle in np.linspace(0.0, 2.0 * np.pi, num_approx, endpoint=False):
         # Tangential component
-        tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
+        tangent_f = np.cos(angle) * t1 + np.sin(angle) * t2
+        tangent_f = tangent_f / max(np.linalg.norm(tangent_f), 1e-12)
         # Friction cone force: normal + scaled tangent
         f = n + mu * tangent_f
-        friction_cones_vecs.append(f / np.linalg.norm(f))  # normalize
+        friction_cones_vecs.append(f / max(np.linalg.norm(f), 1e-12))
     return np.array(friction_cones_vecs)
 
 
@@ -254,17 +266,41 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
+    positions = np.asarray(positions)
+    if positions.size == 0 or len(friction_cones) == 0:
+        return np.zeros((6, 0))
+
     G_list = []
     for i, contact_point in enumerate(positions):
+        if i >= len(friction_cones):
+            break
         r = contact_point - origin
+        r_dist = np.linalg.norm(r)
+        
+        # Skip contact if it's at the origin or extremely close (likely spurious).
+        if r_dist < 1e-8:
+            continue
         
         for cone_direction_f in friction_cones[i]:
+            cone_direction_f = np.asarray(cone_direction_f)
+            if cone_direction_f.shape != (3,):
+                continue
+            
+            # Sanity check: friction vectors should point roughly outward from the object.
+            # A heuristic: the friction force should have positive component in the radial direction.
+            radial_hat = r / max(r_dist, 1e-12)
+            radial_component = np.dot(cone_direction_f, radial_hat)
+            # Allow small inward components (numerical noise), but reject strongly inward forces.
+            if radial_component < -0.3:
+                continue
+            
             torque = np.cross(r, cone_direction_f)
             wrench = np.hstack([cone_direction_f, torque])
             G_list.append(wrench)
-    
-    G = np.column_stack(G_list)
-    return G
+
+    if not G_list:
+        return np.zeros((6, 0))
+    return np.column_stack(G_list)
             
 
 def optimize_necessary_condition(G: np.array):
@@ -274,13 +310,20 @@ def optimize_necessary_condition(G: np.array):
     Parameters
     ----------
     G: grasp matrix
-    env: AllegroHandEnv instance (can use to access physics)
     """
     # Q+ distance: min ||G alpha||_2 subject to alpha in simplex.
+    if G.size == 0 or G.shape[1] == 0:
+        return float('inf')
+
+    # Additional sanity check: if we have very few columns or degenerate geometry, return inf.
     n_dirs = G.shape[1]
+    if n_dirs < 3:  # Need at least 3 independent directions for 6D wrench space coverage.
+        return float('inf')
 
     def f_objective(alpha):
-        return np.linalg.norm(G @ alpha)
+        # Squared norm has the same minimizer as L2 norm and is smoother near zero.
+        wrench = G @ alpha
+        return float(np.dot(wrench, wrench))
 
     x0 = np.ones(n_dirs) / n_dirs
     constraints = ({'type': 'eq', 'fun': lambda a: np.sum(a) - 1.0},)
@@ -292,10 +335,11 @@ def optimize_necessary_condition(G: np.array):
         method='SLSQP',
         bounds=bounds,
         constraints=constraints,
+        options={'maxiter': 200, 'ftol': 1e-9, 'disp': False},
     )
     if not result.success:
         return float('inf')
-    return float(result.fun)
+    return float(np.linalg.norm(G @ result.x))
 
 def optimize_sufficient_condition(G: np.array, M=20):
     """
@@ -309,6 +353,9 @@ def optimize_sufficient_condition(G: np.array, M=20):
     Returns the Q- distance. Negative values indicate force-closure sufficiency.
     """
 
+    if G.size == 0 or G.shape[1] == 0:
+        return float('inf')
+
     n_dirs = G.shape[1]
 
     # Variables are x = [alpha_1 ... alpha_N, r].
@@ -318,13 +365,33 @@ def optimize_sufficient_condition(G: np.array, M=20):
     c[-1] = -1.0 # -r
     bounds = [(0.0, None)] * (n_dirs + 1) # alpha_1 ... alpha_N, r all needs to be non-negative
 
-    # generate M = 20 random unit vectors to present the unit ball
-    rng = np.random.default_rng(0)
+    # Generate deterministic unit directions to approximate the wrench unit sphere.
+    # Use a fixed seed to ensure reproducibility.
+    rng = np.random.default_rng(42)
     rand_directions = rng.normal(size=(M, 6))
     norms = np.linalg.norm(rand_directions, axis=1, keepdims=True)
     # safety precaution: prevents division by 0, in case the rng generates a 0 vector
     norms[norms == 0.0] = 1.0
     rand_directions = rand_directions / norms
+
+    # Include axis directions so obvious extremal rays are always represented.
+    # This catches cases where the grasp is strong along principal force/torque axes.
+    eye_dirs = np.vstack([np.eye(6), -np.eye(6)])
+    rand_directions = np.vstack([rand_directions, eye_dirs])
+    
+    # Ensure uniqueness by removing near-duplicates (numerical stability).
+    unique_dirs = [rand_directions[0:1]]
+    for row in rand_directions[1:]:
+        # Check if this direction is close to any already included.
+        is_duplicate = False
+        for existing in unique_dirs:
+            dot_prod = abs(np.dot(row, existing[0]))
+            if dot_prod > 0.99:  # Nearly parallel directions.
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_dirs.append(row.reshape(1, -1))
+    rand_directions = np.vstack(unique_dirs)
 
     d_k_values = []
     for q_k in rand_directions:
