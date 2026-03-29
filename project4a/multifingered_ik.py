@@ -26,11 +26,51 @@ class LevenbergMarquardtIK:
         self.damping = damping
         self.max_steps = max_steps
         self.physics = physics
+
+        # Cache hand joint indices for clipping only the Allegro hand configuration.
+        self._hand_joint_meta = self._infer_hand_joint_meta()
+
+    def _infer_hand_joint_meta(self):
+        """Infer Allegro hand hinge/slide joints and their qpos addresses."""
+        hand_joint_meta = []
+        name_tokens = ("/ffj", "/mfj", "/rfj", "/thj", "ffj", "mfj", "rfj", "thj")
+
+        for joint_id in range(self.model.njnt):
+            joint_name = mj.mj_id2name(self.model.ptr, mj.mjtObj.mjOBJ_JOINT, joint_id)
+            if joint_name is None or not any(token in joint_name for token in name_tokens):
+                continue
+
+            joint_type = self.model.jnt_type[joint_id]
+            if joint_type not in (mj.mjtJoint.mjJNT_HINGE, mj.mjtJoint.mjJNT_SLIDE):
+                continue
+
+            qpos_adr = self.model.jnt_qposadr[joint_id]
+            joint_range = self.model.jnt_range[joint_id]
+            hand_joint_meta.append((qpos_adr, joint_range[0], joint_range[1]))
+
+        return hand_joint_meta
+
+    def _clip_hand_joints(self, qpos):
+        """Clip only Allegro hand joints to their valid limits."""
+        qpos_clipped = qpos.copy()
+        for qpos_adr, lower, upper in self._hand_joint_meta:
+            qpos_clipped[qpos_adr] = np.clip(qpos_clipped[qpos_adr], lower, upper)
+        return qpos_clipped
+
+    def _orientation_error(self, current_quat, target_quat):
+        """Quaternion-relative orientation error in 3D (xyz part)."""
+        current = current_quat / (np.linalg.norm(current_quat) + 1e-12)
+        target = target_quat / (np.linalg.norm(target_quat) + 1e-12)
+
+        q_err = quat_multiply(target, quat_conjugate(current))
+        if q_err[0] < 0.0:
+            q_err = -q_err
+        return q_err[1:4]
     
     def calculate(self, target_positions: np.array, 
-                  target_orientations: np.array, 
-                  body_ids: list, 
-                  evaluating=False):
+              target_orientations: np.array, 
+              body_ids: list, 
+              evaluating=False):
         """
         Calculates joint angles given target positions and orientations by solving inverse kinematics.
         Uses the Levenberg-Marquardt method for nonlinear optimization. 
@@ -39,83 +79,79 @@ class LevenbergMarquardtIK:
         ----------
         target_positions: 3xn np.array containing n desired x,y,z positions
         target_orientations: 4xn np.array containing n desired quaternion orientations
-        body_ids: list of length n containing the ids for every body
+        body_ids: list of length n containing body names
 
         Returns
         -------
-        new_qpos: np.array of size self.physics.data.qpos containing desired positions in joint space
+        q: np.array of size self.physics.data.qpos containing desired positions in joint space
 
-        Tips: 
-            -To access the body id you can use: self.model.body([insert name of body]).id 
-            -You should consider using clip_to_valid_state in utils.py to ensure that joint poisitons
-            are possible 
+        Algorithm:
+            For each target body, minimize the task-space error using Levenberg-Marquardt damping.
         """
-
+        
         q = self.data.qpos.copy()
+        target_positions = np.asarray(target_positions, dtype=float)
+        target_orientations = np.asarray(target_orientations, dtype=float)
+
         n_targets = len(body_ids)
+        if target_positions.shape[0] != n_targets or target_orientations.shape[0] != n_targets:
+            raise ValueError("target_positions, target_orientations, and body_ids must have matching first dimension")
+
         nv = self.model.nv
+        alpha = float(self.alpha)
+        step_size = float(self.step_size)
+        tolerance = float(self.tol)
+        lambda_damping = float(self.damping)
+        max_steps = int(self.max_steps)
 
-        # Resolve body names to integer body ids once.
-        int_ids = [mj.mj_name2id(self.model.ptr, mj.mjtObj.mjOBJ_BODY, body_name) for body_name in body_ids]
+        int_body_ids = []
+        for name in body_ids:
+            body_id = mj.mj_name2id(self.model.ptr, mj.mjtObj.mjOBJ_BODY, name)
+            if body_id < 0:
+                raise ValueError(f"Body name not found in model: {name}")
+            int_body_ids.append(body_id)
 
-        for i in range(n_targets):
-            body_id = int_ids[i]
-            steps_remaining = self.max_steps
+        for _ in range(max_steps):
+            self.data.qpos[:] = q
+            self.physics.forward()
 
-            while steps_remaining > 0:
-                self.data.qpos[:] = q
-                self.physics.forward()
+            error = np.zeros(6 * n_targets)
+            J = np.zeros((6 * n_targets, nv))
 
-                # Jacobian buffers are allocated per target, so index with i (not body_id).
-                cur_jacp = self.jacp[i]
-                cur_jacr = self.jacr[i]
-                # Get the jacobian for current body
-                mj.mj_jacBody(self.model.ptr, self.data.ptr, cur_jacp, cur_jacr, body_id)
+            for i, body_id in enumerate(int_body_ids):
+                row0 = 6 * i
+                row1 = row0 + 6
 
-                # Build a 6D task-space error to match [jacp; jacr].
-                e_p = target_positions[i] - self.physics.data.xpos[body_id]
-                quat_err = target_orientations[i] - self.physics.data.xquat[body_id]
-                e_r = quat_err[1:]  # use xyz part so rotational error is 3D
-                e = np.hstack((e_p, e_r))  # (6,)
+                current_position = self.physics.data.xpos[body_id]
+                current_orientation = self.physics.data.xquat[body_id]
+                goal_position = target_positions[i]
+                goal_orientation = target_orientations[i]
 
-                # constrain the error to be more  than the tolerance. If less than, we are done. 
-                # e should be computed from the latest forward kinematics at every iteration. 
-                if np.linalg.norm(e) < self.tol:
-                    break
+                pos_err = goal_position - current_position
+                ori_err = self._orientation_error(current_orientation, goal_orientation)
 
-                J = np.vstack((cur_jacp, cur_jacr))  # (6, nv)
-                JT = J.T
-                # Levenberg-Marquardt damped least-squares update.
-                H = JT @ J + self.damping * np.eye(nv)
-                delta_q = np.linalg.solve(H, JT @ e)
-                # quaternion space = 3+4 = 7d , but nv-space is only 6d (6 dof)
-                # delta_q lives in nv-space; integrate into nq-space qpos.
-                # delta_q lives in velocity space. 
-                mj.mj_integratePos(self.model.ptr, q, self.step_size * delta_q, 1.0)
-                
-                # use physics parameter to clip the qpos to the valid state
-                q = clip_to_valid_state(self.physics, q)
-                
-                steps_remaining -= 1
+                error[row0:row1] = np.hstack((pos_err, ori_err))
 
-                ## Pseudocode for the algorithm:
-                
-                # goal_pose = y
-                # q = current joint angles
-                # step_size = desired step size
-                # tolerance = set tolerance
-                # e = goal_pose - current_pose
-                # lambda = damping factor
+                jac_position = self.jacp[i]
+                jac_orientation = self.jacr[i]
+                mj.mj_jacBody(self.model.ptr, self.data.ptr, jac_position, jac_orientation, body_id)
+                J[row0:row1, :] = np.vstack((jac_position, jac_orientation))
 
-                # while norm(e) >= tolerance do
-                #     J = Jacobian(q)
-                #     J_T = Jacobian.transpose()
-                #     J_inv = (J_T * J + lambda * I).inv() * J_T
-                #     delta_q = J_inv * e
-                #     q += step_size * delta_q
-                #     q = check_joint_limits(q)
-                #     e = goal_pose - ForwardKinematics(q)
-                # end while
+            if np.linalg.norm(error) < tolerance:
+                break
+
+            J_T = J.T
+            H = J_T @ J + lambda_damping * np.eye(nv)
+            rhs = J_T @ error
+
+            try:
+                delta_q = np.linalg.solve(H, rhs)
+            except np.linalg.LinAlgError:
+                lambda_damping *= 10.0
+                delta_q = np.linalg.pinv(H) @ rhs
+
+            mj.mj_integratePos(self.model.ptr, q, alpha * step_size * delta_q, 1.0)
+            q = self._clip_hand_joints(q)
 
         return q
     

@@ -1,21 +1,77 @@
 import numpy as np
 from scipy.optimize import linprog, minimize
 import AllegroHandEnv
-import mujoco as mj
-import grasp_synthesis
-import types
 from utils import *
 
-"""
-Note: this code gives a suggested structure for implementing grasp synthesis.
-You may decide to follow it or not. 
-"""
 
-def synthesize_grasp(env: grasp_synthesis.AllegroHandEnv, 
+# Fingertip body names (match the tip_rubber bodies created in the notebook)
+FINGERTIP_BODY_NAMES = [
+    'sawyer/allegro_right/ff_tip_rubber',
+    'sawyer/allegro_right/mf_tip_rubber',
+    'sawyer/allegro_right/rf_tip_rubber',
+    'sawyer/allegro_right/th_tip_rubber',
+]
+
+
+def _get_fingertip_geom_names(physics):
+    """
+    Dynamically extract geom names from fingertip bodies.
+    This handles auto-generated geom names from the MJCF model.
+    """
+    geom_names = []
+    try:
+        for body_name in FINGERTIP_BODY_NAMES:
+            body_id = physics.model.name2id(body_name, 'body')
+            # Find geoms attached to this body
+            body_geom_range = physics.model.body_geomadr[body_id]
+            n_geoms = physics.model.body_geomnum[body_id]
+            for i in range(n_geoms):
+                geom_id = physics.model.geom_bodyid[body_geom_range + i]
+                geom_name = physics.model.id2name(geom_id, 'geom')
+                geom_names.append(geom_name)
+    except Exception as e:
+        print(f"Warning: Could not extract fingertip geom names: {e}")
+        # Fallback to hardcoded names if dynamic extraction fails
+        geom_names = [
+            'sawyer/allegro_right//unnamed_geom_12',
+            'sawyer/allegro_right//unnamed_geom_23',
+            'sawyer/allegro_right//unnamed_geom_34',
+            'sawyer/allegro_right//unnamed_geom_45',
+        ]
+    return geom_names
+
+def _all_fingers_touching(env, fingertip_geom_names, ball_geom_name="ball/ball_geom"):
+    model = env.physics.model
+    contacts = env.physics.data.ptr.contact
+    ncon = env.physics.data.ncon
+
+    fingertips_touching = set()
+    for i in range(ncon):
+        g0_id = int(contacts.geom[i][0]) # first contact object ID
+        g1_id = int(contacts.geom[i][1]) # second contact object ID
+
+        g0 = model.id2name(g0_id, "geom")
+        g1 = model.id2name(g1_id, "geom")
+
+        finger_on_ball = (
+            (g0 in fingertip_geom_names and g1 == ball_geom_name) or
+            (g1 in fingertip_geom_names and g0 == ball_geom_name)
+        )
+        if finger_on_ball:
+            if g0 in fingertip_geom_names:
+                fingertips_touching.add(g0)
+            if g1 in fingertip_geom_names:
+                fingertips_touching.add(g1)
+
+    return len(fingertips_touching) == len(set(fingertip_geom_names))
+    
+
+def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv, 
                          q_h_init: np.array,
                          fingertip_names: list[str], 
                          max_iters=1000, 
-                         lr=0.1):
+                         lr=0.1,
+                         lr_decay=0.5):
     """
     Given an initial hand joint configuration, q_h_init, return adjusted joint angles that are touching
     the object and approximate force closure. This is algorithm 1 in the project specification.
@@ -24,91 +80,61 @@ def synthesize_grasp(env: grasp_synthesis.AllegroHandEnv,
     ----------
     env: AllegroHandEnv instance (can use to access physics)
     q_h_init: array of joint positions for the hand
+    fingertip_names: names of the fingertip bodies as defined in the MJCF
     max_iters: maximum number of iterations for the optimization
     lr: learning rate for the gradient step
+    lr_decay: decay factor for learning rate when no improvement
 
     Output
     ------
     New joint angles after contact and force closure adjustment
     """
     
-    # Require: qh, max iter, λ
-    #     iter ← 0
-    #     qh ← init configuration
-    #     in contact = False
-    #     while iter < max iter do
-        #     if all fingers touching then
-        #       made contact ← True
-        #     end if
-        #     f ← joint space objective
-        #     qnew
-        #     h = qh − λ∇qh f (qh)
-        #     improvement ← f (qh) − f (qnew
-        #     h )
-        #     if improvement > 0 then
-            #     qh ← qnew
-            #     h
-            #     if improvement < 1e−6 then
-            #       break
-            #     end if
-        #     end if
-        #     end while
-    #     return qh
-    # Input validation
-    if q_h_init is None or len(q_h_init) == 0:
-        raise ValueError("q_h_init cannot be empty")
-    if max_iters <= 0:
-        raise ValueError("max_iters must be positive")
-    if lr <= 0:
-        raise ValueError("learning rate must be positive")
-    
     q_h = q_h_init.copy()
     in_contact = False
     
+    # Extract actual fingertip geom names from the model
+    fingertip_geom_names = _get_fingertip_geom_names(env.physics)
+    ball_geom_name = 'ball/ball_geom'
+    
     for iter in range(max_iters):
         
-        # Check if all four fingertips are in contact with the object
-        # Use the environment's contact detection which properly filters for ball contacts
-        if env.physics.data.ncon >= 4:
-            contact_normals, contact_positions = env.get_contact_normals_and_positions(
-                env.physics.data.contact
-            )
-            # If we have 4+ valid contacts with the ball, we have contact
-            if len(contact_positions) >= 4:
-                in_contact = True
+        # Check if all fingertips are in contact with the ball
+        if _all_fingers_touching(env, fingertip_geom_names, ball_geom_name):
+            in_contact = True
         
         # Evaluate the objective function
         f = joint_space_objective(env, q_h, fingertip_names, in_contact)
         
         # Update the joint configuration
         grad_f = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
-        q_h_new = q_h.copy() - lr*grad_f 
+        q_h_new = q_h.copy() - lr * grad_f
 
         # Clip in full qpos space so MuJoCo joint indices/ranges are applied correctly.
-        qpos_full = env.physics.data.qpos.copy()
-        qpos_full[env.q_h_slice] = q_h_new
-        qpos_full = clip_to_valid_state(env.physics, qpos_full)
-        q_h_new = qpos_full[env.q_h_slice].copy()
+        qpos = env.physics.data.qpos.copy()
+        qpos[env.q_h_slice] = q_h_new
+        qpos = clip_to_valid_state(env.physics, qpos)
+        q_h_new = qpos[env.q_h_slice].copy()
 
         # Evaluate the objective function with the new joint configuration to measure improvement
         f_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
-
-        # Only update q_h if the objective function has improved
-        if f_new < f:
+        
+        # update q_h if the objective function has improved
+        improvement = f - f_new 
+        if improvement > 0:
             q_h = q_h_new
-            improvement = f - f_new 
             print(f"Iter {iter}, objective={f_new:.4f}, improvement={improvement:.4f}")
             if improvement < 1e-6:
                 break
         else:
             # If no improvement, reduce lr or break
-            lr *= 0.5
+            lr *= lr_decay
             print(f"Iter {iter}, no improvement, reduce lr to {lr}")
             if lr < 1e-6:
                 break
     return q_h
 
-def joint_space_objective(env: grasp_synthesis.AllegroHandEnv, 
+def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv, 
                           q_h: np.array,
                           fingertip_names: list[str], 
                           in_contact: bool, 
@@ -153,44 +179,39 @@ def joint_space_objective(env: grasp_synthesis.AllegroHandEnv,
     env.set_configuration(q_h)
     finger_positions = env.get_body_positions(fingertip_names)
 
-    # Penalty for distance from surface
-    surface_penalty = 0.0
+    # get total dist from sphere(positions)
+    D = 0.0
     for p in finger_positions:
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
-        surface_penalty += d*d
+        D += d*d
+        
     if not in_contact:
-        return beta * surface_penalty
-    else: # Fingers are in contact, so we calculate Q+ and Q- penalty
+        return beta * D
+    
+    else: 
         # Create friction cone
-        try:
-            contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.contact)
-        except (IndexError, ValueError) as e:
-            print(f"Error getting contact information: {e}")
-            return float('inf')
+        contact_normals, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
+        FC = []
         
-        if len(contact_frames) == 0:
-            return beta * surface_penalty
+        for normal in contact_normals:
+            friction_cone = build_friction_cone(normal, friction_coeff, num_friction_cone_approx)
+            FC.append(friction_cone)
+
+        G = build_grasp_matrix(contact_positions, FC, origin=env.sphere_center)
         
-        directions_list = []
-        for i in range(len(contact_frames)):
-            contact_frame = contact_frames[i]
-            directions_i = build_friction_cone(contact_frame, friction_coeff, num_friction_cone_approx)
-            directions_list.append(directions_i)
-
-        try:
-            G = build_grasp_matrix(contact_positions, directions_list, origin=env.sphere_center)
-        except (ValueError, IndexError) as e:
-            print(f"Error building grasp matrix: {e}")
-            return float('inf')
-
         # First optimize Q+ distance until it's near zero, then switch to optimizing Q- distance
-        Q_plus_dist = optimize_necessary_condition(G, env)
-        if Q_plus_dist > eps:
-            score_fc = Q_plus_dist
+        q_plus_dist = optimize_necessary_condition(G)
+        if q_plus_dist < eps:
+            fc_loss = optimize_sufficient_condition(G)
         else:
-            Q_minus_dist = optimize_sufficient_condition(G)
-            score_fc = Q_minus_dist
-        return score_fc + beta * surface_penalty
+            fc_loss = q_plus_dist
+        
+        # if Q_plus_dist > eps:
+        #     score_fc = Q_plus_dist
+        # else:
+        #     Q_minus_dist = optimize_sufficient_condition(G)
+        #     score_fc = Q_minus_dist
+        return fc_loss + beta * D
 
 
 def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
@@ -207,13 +228,6 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     ------
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
-    if normal.shape[0] < 9:
-        raise ValueError(f"normal must have at least 9 elements, got {normal.shape[0]}")
-    if mu < 0:
-        raise ValueError("Friction coefficient mu must be non-negative")
-    if num_approx < 1:
-        raise ValueError("num_approx must be at least 1")
-    
     n = normal[0:3]
     tangent_1 = normal[3:6]
     tangent_2 = normal[6:9]
@@ -224,11 +238,7 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
         tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
         # Friction cone force: normal + scaled tangent
         f = n + mu * tangent_f
-        norm_f = np.linalg.norm(f)
-        if norm_f > 0:
-            friction_cones_vecs.append(f / norm_f)  # normalize
-        else:
-            friction_cones_vecs.append(f)
+        friction_cones_vecs.append(f / np.linalg.norm(f))  # normalize
     return np.array(friction_cones_vecs)
 
 
@@ -244,11 +254,6 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
-    if len(positions) == 0 or len(friction_cones) == 0:
-        raise ValueError("positions and friction_cones cannot be empty")
-    if len(positions) != len(friction_cones):
-        raise ValueError(f"Number of positions ({len(positions)}) must match number of friction cones ({len(friction_cones)})")
-    
     G_list = []
     for i, contact_point in enumerate(positions):
         r = contact_point - origin
@@ -258,14 +263,11 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
             wrench = np.hstack([cone_direction_f, torque])
             G_list.append(wrench)
     
-    if len(G_list) == 0:
-        raise ValueError("No wrenches generated from friction cones")
-    
     G = np.column_stack(G_list)
     return G
             
 
-def optimize_necessary_condition(G: np.array, env: grasp_synthesis.AllegroHandEnv):
+def optimize_necessary_condition(G: np.array):
     """
     Returns the result of the L2 optimization on G (Q+ distance)
 
@@ -340,6 +342,6 @@ def optimize_sufficient_condition(G: np.array, M=20):
             # Infeasible direction => no positive interior radius along this ray.
             d_k_values.append(0.0)
 
-    if not d_k_values or len(d_k_values) == 0:
-        return 0.0  # Return 0 instead of inf (no force closure)
+    if not d_k_values:
+        return float('inf')
     return float(np.max(d_k_values))
