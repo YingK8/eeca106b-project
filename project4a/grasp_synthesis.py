@@ -48,10 +48,10 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
             ])
 
             # Specify the exact geom contacts we're looking for (if you change the allegro hand urdf you might want to check that these still correspond to the fingertips)
-            one   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_12']
-            two   = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_23']
-            three = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_34']
-            four  = ['ball/sphere', 'sawyer/allegro_right//unnamed_geom_45']
+            one   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_12']
+            two   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_23']
+            three = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_34']
+            four  = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_45']
 
             # Check if all four fingertips are touching the object
             if (one in geoms and two in geoms and three in geoms and four in geoms and
@@ -285,15 +285,6 @@ def optimize_sufficient_condition(G: np.array, M=20):
     """
 
     G = np.asarray(G, dtype=float)
-    if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
-        return float('inf')
-
-    wrench_dim = G.shape[0]
-    if wrench_dim != 6:
-        return float('inf')
-
-    if np.linalg.matrix_rank(G) < wrench_dim:
-        return 0.0
 
     Q = _generate_sphere_samples(M)
     N = G.shape[1]
@@ -321,14 +312,11 @@ def optimize_sufficient_condition(G: np.array, M=20):
             {"max_iter": 500, "print_level": 0, "sb": "yes"},
         )
 
-        try:
-            sol = opti.solve()
-            r_star = float(sol.value(r))
-            d_k_values.append(-r_star)
-        except Exception:
-            # Infeasible direction => no positive interior radius along this ray.
-            d_k_values.append(0.0)
-
-    if not d_k_values:
-        return float('inf')
-    return float(np.max(d_k_values))
+        # optimization problem may not be always well constructed, using try-except
+    try:
+        sol = opti.solve()
+        return -float(sol.value(r)) # notice the negative sign
+    except Exception as err:
+        print(err)
+    
+    return 0.0  # return 0.0 radius if no valid solution
