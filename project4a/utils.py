@@ -11,12 +11,28 @@ def clip_to_valid_state(physics: dm_control.mjcf.physics.Physics, qpos: np.array
     qpos_clipped = qpos.copy()
 
     for joint_idx in range(physics.model.njnt):
-        joint_range = physics.model.jnt_range[joint_idx]
+        qadr = physics.model.jnt_qposadr[joint_idx]
+        joint_type = int(physics.model.jnt_type[joint_idx])
 
-        qpos_clipped[physics.model.jnt_qposadr[joint_idx]] = np.clip(
-            qpos_clipped[physics.model.jnt_qposadr[joint_idx]], 
-            joint_range[0],
-            joint_range[1])
+        # MuJoCo joint type ids: free=0, ball=1, slide=2, hinge=3.
+        if joint_type in (2, 3):
+            if bool(physics.model.jnt_limited[joint_idx]):
+                joint_range = physics.model.jnt_range[joint_idx]
+                qpos_clipped[qadr] = np.clip(qpos_clipped[qadr], joint_range[0], joint_range[1])
+        elif joint_type == 0:
+            quat = qpos_clipped[qadr + 3 : qadr + 7]
+            quat_norm = np.linalg.norm(quat)
+            if quat_norm < 1e-12:
+                qpos_clipped[qadr + 3 : qadr + 7] = np.array([1.0, 0.0, 0.0, 0.0])
+            else:
+                qpos_clipped[qadr + 3 : qadr + 7] = quat / quat_norm
+        elif joint_type == 1:
+            quat = qpos_clipped[qadr : qadr + 4]
+            quat_norm = np.linalg.norm(quat)
+            if quat_norm < 1e-12:
+                qpos_clipped[qadr : qadr + 4] = np.array([1.0, 0.0, 0.0, 0.0])
+            else:
+                qpos_clipped[qadr : qadr + 4] = quat / quat_norm
 
     return qpos_clipped
 

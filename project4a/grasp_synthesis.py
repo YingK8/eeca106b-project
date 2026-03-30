@@ -169,14 +169,15 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     tangent_1 = normal[3:6]
     tangent_2 = normal[6:9]
     
-    d_theta = 2 * np.pi / num_approx
-    
     friction_cones_vecs = []
-    for i in range(num_approx):
-        vec =   mu * (np.cos(theta_i) * x_axis + np.sin(theta_i) * y_axis) + z_axis
-        vec /= np.linalg.norm(vec)
-        friction_cones_vecs.append(vec)
-    return friction_cones_vecs
+    for angle in np.linspace(0.0, 2.0 * np.pi, num_approx, endpoint=False):
+        # Tangential component
+        tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
+        # Friction cone force: normal + scaled tangent
+        f = n + mu * tangent_f
+        friction_cones_vecs.append(f / np.linalg.norm(f))
+    return np.array(friction_cones_vecs)
+
 
 def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zeros(3)):
     """
@@ -190,23 +191,18 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
-    
-    # define the G matrix
-    G_mat = np.empty((6,0))
+    positions = np.atleast_2d(np.asarray(positions, dtype=float))
+    origin = np.asarray(origin, dtype=float).reshape(3,)
 
-    # define dimension variables
-    n_contacts = len(positions)  # number of contacts = number of fingers
-    
-    # two layer for loops to go through all the directions
-    for i_ in range(n_contacts):
-        pos_vec = positions[i_,:]   # (3,)
-        for j_ in range(len(friction_cones[i_])):
-            dir_vec = friction_cones[i_][j_] # (3,)
-            G_ji = np.hstack((dir_vec, np.cross((pos_vec - origin), dir_vec))) # (6,)
-            # append the current cone direction to the Grasp map matrix
-            G_mat = np.hstack((G_mat, G_ji.reshape(6,1)))       # (6, N_= num_fingers * num_approx_vecs)
+    wrench_columns = []
+    for p, cone_dirs in zip(positions, friction_cones):
+        r = p - origin
+        for f in np.atleast_2d(np.asarray(cone_dirs, dtype=float)):
+            wrench_columns.append(np.hstack((f, np.cross(r, f))))
 
-    return G_mat
+    if not wrench_columns:
+        return np.zeros((6, 0))
+    return np.column_stack(wrench_columns)
 
 
 def _generate_sphere_samples(M, seed=42):
@@ -318,10 +314,6 @@ def optimize_sufficient_condition(G: np.array, M=20):
         opti.subject_to(ca.sum1(alpha) == 1)
         opti.subject_to(alpha >= 0)
         opti.subject_to(r >= 0)
-        
-        eps_ = 0.0 # [MT]: may consider a value >0 for numerical stability
-        opti.set_initial(r, eps_)
-        opti.set_initial(A, eps_)
 
         opti.solver(
             "ipopt",
