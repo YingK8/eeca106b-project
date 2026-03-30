@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: project4a
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: casadi
+Requires-Dist: dm-control>=1.0.38
+Requires-Dist: ipykernel>=7.2.0
+Requires-Dist: jupyter>=1.1.1
+Requires-Dist: mediapy>=1.2.6
+Requires-Dist: mujoco>=3.6.0
+Requires-Dist: robot-descriptions>=1.23.0

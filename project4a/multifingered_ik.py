@@ -89,6 +89,7 @@ class LevenbergMarquardtIK:
             For each target body, minimize the task-space error using Levenberg-Marquardt damping.
         """
         
+        # --- Initialization (goal_pose, q, step_size, tolerance, lambda) ---
         q = self.data.qpos.copy()
         target_positions = np.asarray(target_positions, dtype=float)
         target_orientations = np.asarray(target_orientations, dtype=float)
@@ -104,6 +105,7 @@ class LevenbergMarquardtIK:
         lambda_damping = float(self.damping)
         max_steps = int(self.max_steps)
 
+        # Resolve body names once before the iterative solve.
         int_body_ids = []
         for name in body_ids:
             body_id = mj.mj_name2id(self.model.ptr, mj.mjtObj.mjOBJ_BODY, name)
@@ -111,11 +113,14 @@ class LevenbergMarquardtIK:
                 raise ValueError(f"Body name not found in model: {name}")
             int_body_ids.append(body_id)
 
+        # --- Levenberg-Marquardt loop: while norm(e) >= tolerance ---
         for _ in range(max_steps):
+            # Forward kinematics at current q.
             self.data.qpos[:] = q
             self.physics.forward()
 
-            error = np.zeros(6 * n_targets)
+            # Build stacked task-space error e and stacked Jacobian J.
+            e = np.zeros(6 * n_targets)
             J = np.zeros((6 * n_targets, nv))
 
             for i, body_id in enumerate(int_body_ids):
@@ -129,20 +134,22 @@ class LevenbergMarquardtIK:
 
                 pos_err = goal_position - current_position
                 ori_err = self._orientation_error(current_orientation, goal_orientation)
-
-                error[row0:row1] = np.hstack((pos_err, ori_err))
+                e[row0:row1] = np.hstack((pos_err, ori_err))
 
                 jac_position = self.jacp[i]
                 jac_orientation = self.jacr[i]
                 mj.mj_jacBody(self.model.ptr, self.data.ptr, jac_position, jac_orientation, body_id)
                 J[row0:row1, :] = np.vstack((jac_position, jac_orientation))
 
-            if np.linalg.norm(error) < tolerance:
+            # Stop when the task-space error norm reaches tolerance.
+            if np.linalg.norm(e) < tolerance:
                 break
 
+            # Damped least-squares inverse:
+            # delta_q = (J^T J + lambda I)^(-1) J^T e
             J_T = J.T
             H = J_T @ J + lambda_damping * np.eye(nv)
-            rhs = J_T @ error
+            rhs = J_T @ e
 
             try:
                 delta_q = np.linalg.solve(H, rhs)
@@ -150,6 +157,7 @@ class LevenbergMarquardtIK:
                 lambda_damping *= 10.0
                 delta_q = np.linalg.pinv(H) @ rhs
 
+            # q += step_size * delta_q, then enforce joint limits.
             mj.mj_integratePos(self.model.ptr, q, alpha * step_size * delta_q, 1.0)
             q = self._clip_hand_joints(q)
 
