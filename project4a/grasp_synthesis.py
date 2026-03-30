@@ -15,7 +15,7 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                          q_h_init: np.array,
                          fingertip_names: list[str], 
                          max_iters=2000, 
-                         lr=0.5,
+                         lr=1,
                          return_history=False):
     """
     Given an initial hand joint configuration, q_h_init, return adjusted joint angles that are touching
