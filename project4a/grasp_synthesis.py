@@ -220,6 +220,21 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     outside_distances = np.array(outside_distances)
     sync_penalty = np.var(outside_distances)
     surface_penalty += sync_weight * sync_penalty
+
+    # Inter-finger collision penalty
+    collision_penalty = 0.0
+    min_finger_dist = 0.025  # meters
+    collision_weight = 100.0
+    n_fingers = len(finger_positions)
+    for i in range(n_fingers):
+        for j in range(i+1, n_fingers):
+            dist = np.linalg.norm(finger_positions[i] - finger_positions[j])
+            if dist < min_finger_dist:
+                print(f"Collision: Fingers {i+1} and {j+1} too close (d={dist:.4f})")
+                collision_penalty += (min_finger_dist - dist) ** 2
+    surface_penalty += collision_weight * collision_penalty
+
+    
     if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
         return beta * surface_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
