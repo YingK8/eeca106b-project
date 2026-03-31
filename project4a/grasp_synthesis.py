@@ -34,9 +34,39 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
     """
     q_h = q_h_init.copy()
     history = [q_h.copy()] if return_history else None
+
+    # Freeze finger joint updates once that finger's ball-geom contact is detected.
+    # Assumes q_h is ordered as 4 fingers x 4 joints (ff, mf, rf, th) in q_h_slice.
+    finger_geom_names = [
+        "sawyer/allegro_right//unnamed_geom_12",  # ff
+        "sawyer/allegro_right//unnamed_geom_23",  # mf
+        "sawyer/allegro_right//unnamed_geom_34",  # rf
+        "sawyer/allegro_right//unnamed_geom_45",  # th
+    ]
+    frozen_finger = np.zeros(4, dtype=bool)
+
+    def _pair_match(a: str, b: str) -> list[str]:
+        return [a, b]
+
+    def min_surface_distance(q_h_local: np.array) -> float:
+        """Minimum signed distance to sphere surface across fingertips (negative => penetration)."""
+        env.set_configuration(q_h_local)
+        finger_positions_local = env.get_body_positions(fingertip_names)
+        dists = [
+            env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
+            for p in finger_positions_local
+        ]
+        return float(np.min(dists)) if len(dists) else float("inf")
+
+    penetration_tol = 1e-4
     for it in range(max_iters):
+        # Ensure MuJoCo state matches q_h before reading contact data.
+        # so when we are trying to syntheesize a grasp we are checking for finger contact
+        # at every timestep, instead of just the data at the previous timestep, not the current time. 
+        env.set_configuration(q_h)
         in_contact = False
         if env.physics.data.ncon >= 4:
+            print("4 geom contacts found")
             geom_id_pairs = env.physics.data.ptr.contact.geom
             # Get list of contact pair geoms
             geoms = np.array([
@@ -53,17 +83,51 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
             three = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_34']
             four  = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_45']
 
+            # Update frozen fingers when their ball contact is present (order-invariant).
+            for fi, geom_name in enumerate(finger_geom_names):
+                if frozen_finger[fi]:
+                    continue
+                if (_pair_match("ball_geom", geom_name) in geoms) or (_pair_match(geom_name, "ball_geom") in geoms):
+                    frozen_finger[fi] = True
+                    print(f"[freeze] finger {fi} frozen due to contact with {geom_name}")
+
             # Check if all four fingertips are touching the object
             if (one in geoms and two in geoms and three in geoms and four in geoms and
                     env.physics.data.ptr.contact.frame.shape[0] >= 4):
                 in_contact = True
+                print("SUCCESS: GEOMS are as follows: ", geoms)
+                print("FINGERTIPS ARE IN CONTACT    ")
+                break
+            elif one in geoms:
+                print("ONE GEOM IS IN CONTACT")
+            elif two in geoms:
+                print("TWO GEOMS ARE IN CONTACT")
+            elif three in geoms:
+                print("THREE GEOMS ARE IN CONTACT")
+            elif four in geoms:
+                print("FOUR GEOMS ARE IN CONTACT")
+            else:
+                print("FINGERTIPS ARE NOT IN CONTACT")
+        else:
+            print("LESS THAN 4 GEOM CONTACTS FOUND")
         
         # Evaluate the objective function and check its gradient
         fval = joint_space_objective(env, q_h, fingertip_names, in_contact)
         grad = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
 
+        # Zero gradient for any finger that has already made its contact, and keep its joints fixed.
+        for fi in range(4):
+            if frozen_finger[fi]:
+                grad[fi * 4 : (fi + 1) * 4] = 0.0
+
         # Update the joint configuration
+        min_d_before = min_surface_distance(q_h)
         q_h_new = q_h.copy() - lr*grad
+
+        # Hard-freeze joints for fingers already in contact.
+        for fi in range(4):
+            if frozen_finger[fi]:
+                q_h_new[fi * 4 : (fi + 1) * 4] = q_h[fi * 4 : (fi + 1) * 4]
         
         # Clip joint configuration to be in bounds
         qpos_new = env.physics.data.qpos.copy()
@@ -71,8 +135,20 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
         qpos_new = clip_to_valid_state(env.physics, qpos_new)
         q_h_new = qpos_new[env.q_h_slice].copy()
 
+        # Reject if penetration got worse (more negative signed distance).
+        min_d_after = min_surface_distance(q_h_new)
+        env.set_configuration(q_h)
+        if (min_d_after < min_d_before - penetration_tol) and (min_d_after < 0.0):
+            lr *= 0.5
+            print(
+                f"Iter {it}, reject step (penetration worsened: {min_d_before:.5f} -> {min_d_after:.5f}), lr -> {lr}"
+            )
+            if lr < 1e-6:
+                break
+            continue
+
         # Evaluate the objective function with the new joint configuration to measure improvement
-        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
+        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact, penetration_weight=20000)
 
         # Only update q_h if the objective function has improved
         if fval_new < fval:
@@ -259,37 +335,53 @@ def optimize_necessary_condition(G: np.array, *_):
     ----------
     G: grasp matrix
     """
+    # Change G to float type
     G = np.asarray(G, dtype=float)
     if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
+        # if G has no instances or the grasp matrix is not a 2D matrix
         return float('inf')
 
+    # N = number of adjoint grasps
     N = G.shape[1]
+    # wrench_dim = per adjoint dimension (should be 6 for 3D)
     wrench_dim = G.shape[0]
     if wrench_dim == 0:
         return float('inf')
 
-    alpha0 = np.full(N, 1.0 / N)
+    # Numeric matrix container (Dense Matrix) for casadi
+    G_ca = ca.DM(G)
 
-    def objective(alpha):
-        wrench = G @ alpha
-        return float(wrench @ wrench)
+    opti = ca.Opti()
+    # minimizee the squared norm of wrench, alpha is the actual  grasp
+    alpha = opti.variable(N, 1)
+    # multiply the grasp matrix by the adjoint grasp to get the wrench
+    wrench = G_ca @ alpha
 
-    constraints = [{"type": "eq", "fun": lambda alpha: np.sum(alpha) - 1.0}]
-    bounds = [(0.0, None)] * N
+    # minimize the squared norm of the wrench
+    opti.minimize(ca.sumsqr(wrench))
+    # subject to the constraint that the sum of the adjoint grasps is 1
+    opti.subject_to(ca.sum1(alpha) == 1)
+    # subject to the constraint that the adjoint grasps (elementwise) are non-negative
+    opti.subject_to(alpha >= 0)
 
-    res = minimize(
-        objective,
-        alpha0,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-        options={"maxiter": 200, "ftol": 1e-9, "disp": False},
+    # uses ipopt solver to solve the optimization problem
+    # expand: True means that the solver will expand the problem into a larger problem
+    # max_iter: maximum number of iterations
+    # print_level: 0 means no output, 1 means minimal output, 2 means verbose output
+    # sb: "yes" means that the solver will use a sparse backend
+    opti.solver(
+        "ipopt",
+        {"expand": True},
+        {"max_iter": 500, "print_level": 0, "sb": "yes", "print_time": 0},
     )
 
-    if not res.success:
+    try:
+        sol = opti.solve()
+    except Exception:
         return float('inf')
 
-    return float(np.linalg.norm(G @ res.x))
+    alpha_star = np.array(sol.value(alpha)).reshape(-1)
+    return float(np.linalg.norm(G @ alpha_star))
     
 def optimize_sufficient_condition(G: np.array, M=20):
     """
