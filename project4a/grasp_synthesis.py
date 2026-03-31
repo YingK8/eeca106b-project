@@ -222,9 +222,9 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     surface_penalty += sync_weight * sync_penalty
 
     # Inter-finger collision penalty
-    collision_penalty = 0.80
-    min_finger_dist = 0.01  # meters
-    collision_weight = 0.50
+    collision_penalty = 0.0
+    min_finger_dist = 0.025  # meters
+    collision_weight = 100.0
     n_fingers = len(finger_positions)
     for i in range(n_fingers):
         for j in range(i+1, n_fingers):
