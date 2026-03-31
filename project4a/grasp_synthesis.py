@@ -45,9 +45,6 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
     ]
     frozen_finger = np.zeros(4, dtype=bool)
 
-    def _pair_match(a: str, b: str) -> list[str]:
-        return [a, b]
-
     def min_surface_distance(q_h_local: np.array) -> float:
         """Minimum signed distance to sphere surface across fingertips (negative => penetration)."""
         env.set_configuration(q_h_local)
@@ -77,37 +74,39 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                 for pair in geom_id_pairs
             ])
 
-            # Specify the exact geom contacts we're looking for (if you change the allegro hand urdf you might want to check that these still correspond to the fingertips)
-            one   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_12']
-            two   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_23']
-            three = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_34']
-            four  = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_45']
+            # Convert MuJoCo contact pairs into an order-invariant set.
+            # This avoids subtle/incorrect behavior from `list in numpy_array`.
+            contact_pair_set = set()
+            for a, b in geoms.tolist():
+                if a is None or b is None:
+                    continue
+                contact_pair_set.add(frozenset((a, b)))
+
+            # MuJoCo may report the ball geom as `ball/ball_geom` (merged MJCF) or `ball_geom`.
+            ball_geom_names = {"ball/ball_geom", "ball_geom"}
+
+            def has_ball_contact(hand_geom_name: str) -> bool:
+                return any(
+                    frozenset((ball_name, hand_geom_name)) in contact_pair_set
+                    for ball_name in ball_geom_names
+                )
 
             # Update frozen fingers when their ball contact is present (order-invariant).
             for fi, geom_name in enumerate(finger_geom_names):
                 if frozen_finger[fi]:
                     continue
-                if (_pair_match("ball_geom", geom_name) in geoms) or (_pair_match(geom_name, "ball_geom") in geoms):
+                if has_ball_contact(geom_name):
                     frozen_finger[fi] = True
                     print(f"[freeze] finger {fi} frozen due to contact with {geom_name}")
 
             # Check if all four fingertips are touching the object
-            if (one in geoms and two in geoms and three in geoms and four in geoms and
-                    env.physics.data.ptr.contact.frame.shape[0] >= 4):
+            if all(has_ball_contact(g) for g in finger_geom_names):
                 in_contact = True
                 print("SUCCESS: GEOMS are as follows: ", geoms)
                 print("FINGERTIPS ARE IN CONTACT    ")
                 break
-            elif one in geoms:
-                print("ONE GEOM IS IN CONTACT")
-            elif two in geoms:
-                print("TWO GEOMS ARE IN CONTACT")
-            elif three in geoms:
-                print("THREE GEOMS ARE IN CONTACT")
-            elif four in geoms:
-                print("FOUR GEOMS ARE IN CONTACT")
             else:
-                print("FINGERTIPS ARE NOT IN CONTACT")
+                print("frozen_finger:", frozen_finger.astype(int), "(1 means that finger is in ball contact)")
         else:
             print("LESS THAN 4 GEOM CONTACTS FOUND")
         
