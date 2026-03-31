@@ -14,7 +14,7 @@ You may decide to follow it or not.
 def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv, 
                          q_h_init: np.array,
                          fingertip_names: list[str], 
-                         max_iters=2000, 
+                         max_iters=1000, 
                          lr=1,
                          return_history=False):
     """
@@ -97,7 +97,9 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
                           q_h: np.array,
                           fingertip_names: list[str], 
                           in_contact: bool, 
-                          beta=5, 
+                          beta=10, 
+                          penetration_weight=600,
+                          sync_weight=10,
                           friction_coeff=0.5, 
                           num_friction_cone_approx=8,
                           eps=0.00001):
@@ -113,6 +115,8 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     fingertip_names: names of the fingertips as defined in the MJCF
     in_contact: helper variable to determine if the fingers are in contact with the object
     beta: weight coefficient on the surface penalty 
+    penetration_weight: extra multiplier for inside-sphere (negative signed distance) penalty
+    sync_weight: weight on equal-rate fingertip approach penalty
     friction_coeff: Friction coefficient for the ball
     num_friction_cone_approx: number of approximation vectors in the friction cone
     
@@ -125,9 +129,22 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
 
     # Penalty for distance from surface
     surface_penalty = 0.0
+    outside_distances = []
     for p in finger_positions:
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
-        surface_penalty += d*d
+        # Penalize penetration more heavily so early-contact fingers do not clip through the sphere.
+        if d < 0:
+            surface_penalty += penetration_weight * d * d
+            outside_distances.append(0.0)
+        else:
+            surface_penalty += d * d
+
+            # Use outside distance for synchronization so all fingertips close in together.
+            outside_distances.append(d)
+
+    outside_distances = np.array(outside_distances)
+    sync_penalty = np.var(outside_distances)
+    surface_penalty += sync_weight * sync_penalty
     if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
         return beta * surface_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
@@ -165,19 +182,16 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
     n = normal[0:3]
-    n = n / max(np.linalg.norm(n), 1e-12)
     tangent_1 = normal[3:6]
     tangent_2 = normal[6:9]
     
+    d_theta = 2 * np.pi / num_approx
+    
     friction_cones_vecs = []
-    for angle in np.linspace(0.0, 2.0 * np.pi, num_approx, endpoint=False):
-        # Tangential component
-        tangent_f = np.cos(angle) * tangent_1 + np.sin(angle) * tangent_2
-        # Friction cone force: normal + scaled tangent
-        f = n + mu * tangent_f
-        friction_cones_vecs.append(f / np.linalg.norm(f))
-    return np.array(friction_cones_vecs)
-
+    for i in range(num_approx):
+        vec =   mu * (np.cos(d_theta * i) * tangent_1 + np.sin(d_theta * i) * tangent_2) + n
+        friction_cones_vecs.append(vec)
+    return friction_cones_vecs
 
 def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zeros(3)):
     """
@@ -191,43 +205,51 @@ def build_grasp_matrix(positions: np.array, friction_cones: list, origin=np.zero
     
     Return a 2D numpy array G with shape (6, number_of_cone_directions).
     """
-    positions = np.atleast_2d(np.asarray(positions, dtype=float))
-    origin = np.asarray(origin, dtype=float).reshape(3,)
+    
+    # define the G matrix
+    G_mat = np.empty((6,0))
 
-    wrench_columns = []
-    for p, cone_dirs in zip(positions, friction_cones):
-        r = p - origin
-        for f in np.atleast_2d(np.asarray(cone_dirs, dtype=float)):
-            wrench_columns.append(np.hstack((f, np.cross(r, f))))
+    # define dimension variables
+    n_contacts = len(positions)  # number of contacts = number of fingers
+    
+    # two layer for loops to go through all the directions
+    for i_ in range(n_contacts):
+        pos_vec = positions[i_,:]   # (3,)
+        for j_ in range(len(friction_cones[i_])):
+            dir_vec = friction_cones[i_][j_] # (3,)
+            G_ji = np.hstack((dir_vec, np.cross((pos_vec - origin), dir_vec))) # (6,)
+            # append the current cone direction to the Grasp map matrix
+            G_mat = np.hstack((G_mat, G_ji.reshape(6,1)))       # (6, N_= num_fingers * num_approx_vecs)
 
-    if not wrench_columns:
-        return np.zeros((6, 0))
-    return np.column_stack(wrench_columns)
+    return G_mat
 
 
 def _generate_sphere_samples(M, seed=42):
     """
     Generate exactly M points uniformly on the 6D unit sphere S^5.
     Method: sample Gaussian vectors in R^6 and normalize each row.
+    
+    6 by M, so column vectors
     """
     M = int(M)
     if M <= 0:
         return np.zeros((0, 6))
 
     rng = np.random.default_rng(seed)
-    points = rng.normal(0.0, 1.0, (M, 6))
-    norms = np.linalg.norm(points, axis=1)
+    points = rng.normal(0.0, 1.0, (6, M))
+    norms = np.linalg.norm(points, axis=0)
 
-    # Extremely unlikely, but prevent divide-by-zero if a near-zero vector appears.
+    # Replace any zero column by a fixed nonzero vector before normalization.
     zero_mask = norms < 1e-12
-    while np.any(zero_mask):
-        points[zero_mask] = rng.normal(0.0, 1.0, (np.sum(zero_mask), 6))
-        norms = np.linalg.norm(points, axis=1)
-        zero_mask = norms < 1e-12
+    if np.any(zero_mask):
+        fallback = np.zeros((6, 1))
+        fallback[0, 0] = 1.0
+        points[:, zero_mask] = fallback
+        norms[zero_mask] = 1.0
 
-    points_on_unit_sphere = points / norms[:, np.newaxis]
+    points_on_unit_sphere = points / norms[np.newaxis, :]
 
-    return points_on_unit_sphere  
+    return points_on_unit_sphere
 
 def optimize_necessary_condition(G: np.array, *_):
     """
@@ -246,32 +268,29 @@ def optimize_necessary_condition(G: np.array, *_):
     if wrench_dim == 0:
         return float('inf')
 
-    G_ca = ca.DM(G)
+    alpha0 = np.full(N, 1.0 / N)
 
-    opti = ca.Opti()
-    alpha = opti.variable(N, 1)
-    wrench = G_ca @ alpha
+    def objective(alpha):
+        wrench = G @ alpha
+        return float(wrench @ wrench)
 
-    opti.minimize(ca.sumsqr(wrench))
-    opti.subject_to(ca.sum1(alpha) == 1)
-    opti.subject_to(alpha >= 0)
+    constraints = [{"type": "eq", "fun": lambda alpha: np.sum(alpha) - 1.0}]
+    bounds = [(0.0, None)] * N
 
-    opti.solver(
-        "ipopt",
-        {"expand": True},
-        {"max_iter": 500, "print_level": 0, "sb": "yes"},
+    res = minimize(
+        objective,
+        alpha0,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+        options={"maxiter": 200, "ftol": 1e-9, "disp": False},
     )
 
-    try:
-        sol = opti.solve()
-    except Exception:
+    if not res.success:
         return float('inf')
 
-    alpha_star = np.array(sol.value(alpha)).reshape(-1)
-    return float(np.linalg.norm(G @ alpha_star))
+    return float(np.linalg.norm(G @ res.x))
     
-    
-
 def optimize_sufficient_condition(G: np.array, M=20):
     """
     Runs the optimization from the project spec to evaluate Q- distance. 
@@ -283,40 +302,35 @@ def optimize_sufficient_condition(G: np.array, M=20):
 
     Returns the Q- distance. Negative values indicate force-closure sufficiency.
     """
-
-    G = np.asarray(G, dtype=float)
-
-    Q = _generate_sphere_samples(M)
-    N = G.shape[1]
-    G_ca = ca.DM(G)
-
-    d_k_values = []
-    for q_k in Q:
-        opti = ca.Opti()
-
-        alpha = opti.variable(N, 1)
-        r = opti.variable()
-        q_ca = ca.DM(q_k).reshape((6, 1))
-
-        # max r s.t. G alpha = r q_k, alpha in simplex, r >= 0.
-        # Equivalent NLP for IPOPT: min -r.
-        opti.minimize(-r)
-        opti.subject_to(G_ca @ alpha == r * q_ca)
-        opti.subject_to(ca.sum1(alpha) == 1)
-        opti.subject_to(alpha >= 0)
-        opti.subject_to(r >= 0)
-
-        opti.solver(
-            "ipopt",
-            {"expand": True},
-            {"max_iter": 500, "print_level": 0, "sb": "yes"},
-        )
-
-        # optimization problem may not be always well constructed, using try-except
-    try:
-        sol = opti.solve()
-        return -float(sol.value(r)) # notice the negative sign
-    except Exception as err:
-        print(err)
     
-    return 0.0  # return 0.0 radius if no valid solution
+    G = np.asarray(G, dtype=float)
+    N = G.shape[1]
+    wrench_dim = G.shape[0]
+    Q = _generate_sphere_samples(M)
+
+    c = np.zeros(N + 1)
+    c[-1] = -1.0
+    bounds = [(0.0, None)] * N + [(0.0, None)]
+
+    d_q_vals = []
+
+    # LP in variables [alpha_1 ... alpha_N r] for each sampled direction q_k.
+    for k in range(M):
+        qk = Q[:, k]
+
+        A_eq = np.zeros((wrench_dim + 1, N + 1))
+        A_eq[:wrench_dim, :N] = G
+        A_eq[:wrench_dim, -1] = -qk
+        A_eq[wrench_dim, :N] = 1.0
+
+        b_eq = np.zeros(wrench_dim + 1)
+        b_eq[wrench_dim] = 1.0
+
+        res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
+        if res.success:
+            d_q_vals.append(float(res.x[-1]))
+
+    if not d_q_vals:
+        return 0.0
+
+    return -min(d_q_vals)
