@@ -55,12 +55,22 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
         ]
         return float(np.min(dists)) if len(dists) else float("inf")
 
+    def surface_distances(q_h_local: np.array) -> np.array:
+        """Signed distance to sphere surface for each fingertip body."""
+        env.set_configuration(q_h_local)
+        finger_positions_local = env.get_body_positions(fingertip_names)
+        return np.array([
+            env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
+            for p in finger_positions_local
+        ], dtype=float)
+
     penetration_tol = 1e-4
+    contact_achieved = False
     for it in range(max_iters):
         # Ensure MuJoCo state matches q_h before reading contact data.
         # so when we are trying to syntheesize a grasp we are checking for finger contact
         # at every timestep, instead of just the data at the previous timestep, not the current time. 
-        env.set_configuration(q_h)
+        env.set_configuration(q_h) # reinitialize
         in_contact = False
         if env.physics.data.ncon >= 4:
             print("4 geom contacts found")
@@ -100,11 +110,15 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                     print(f"[freeze] finger {fi} frozen due to contact with {geom_name}")
 
             # Check if all four fingertips are touching the object
-            if all(has_ball_contact(g) for g in finger_geom_names):
+            if sum(has_ball_contact(g) for g in finger_geom_names) >= 3: # at least 3 fingertips are in contact
+                if not contact_achieved:
+                    lr *= 0.1 # decrease learning rate on first contact
                 in_contact = True
+                contact_achieved = True
                 print("SUCCESS: GEOMS are as follows: ", geoms)
                 print("FINGERTIPS ARE IN CONTACT    ")
-                break
+                # no force closure yet, so we don't break
+                # break
             else:
                 print("frozen_finger:", frozen_finger.astype(int), "(1 means that finger is in ball contact)")
         else:
@@ -114,19 +128,20 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
         fval = joint_space_objective(env, q_h, fingertip_names, in_contact)
         grad = numeric_gradient(joint_space_objective, q_h, env, fingertip_names, in_contact)
 
-        # Zero gradient for any finger that has already made its contact, and keep its joints fixed.
-        for fi in range(4):
-            if frozen_finger[fi]:
-                grad[fi * 4 : (fi + 1) * 4] = 0.0
+        # # Zero gradient for any finger that has already made its contact, and keep its joints fixed.
+        # for fi in range(4):
+        #     if frozen_finger[fi]:
+        #         grad[fi * 4 : (fi + 1) * 4] = 0.0
 
         # Update the joint configuration
         min_d_before = min_surface_distance(q_h)
+        finger_d_before = surface_distances(q_h)
         q_h_new = q_h.copy() - lr*grad
 
-        # Hard-freeze joints for fingers already in contact.
-        for fi in range(4):
-            if frozen_finger[fi]:
-                q_h_new[fi * 4 : (fi + 1) * 4] = q_h[fi * 4 : (fi + 1) * 4]
+        # # Hard-freeze joints for fingers already in contact.
+        # for fi in range(4):
+        #     if frozen_finger[fi]:
+        #         q_h_new[fi * 4 : (fi + 1) * 4] = q_h[fi * 4 : (fi + 1) * 4]
         
         # Clip joint configuration to be in bounds
         qpos_new = env.physics.data.qpos.copy()
@@ -134,20 +149,64 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
         qpos_new = clip_to_valid_state(env.physics, qpos_new)
         q_h_new = qpos_new[env.q_h_slice].copy()
 
+        # Soft post-contact lock: once a finger has contacted the ball, do not allow
+        # that finger to move further inward. Revert only that finger's 4 joints.
+        finger_d_after = surface_distances(q_h_new)
+        for fi in range(4):
+            if frozen_finger[fi] and (finger_d_after[fi] < finger_d_before[fi] - penetration_tol):
+                q_h_new[fi * 4 : (fi + 1) * 4] = q_h[fi * 4 : (fi + 1) * 4]
+
+        # Recompute distances after any per-finger revert.
+        finger_d_after = surface_distances(q_h_new)
+
         # Reject if penetration got worse (more negative signed distance).
         min_d_after = min_surface_distance(q_h_new)
-        env.set_configuration(q_h)
+
         if (min_d_after < min_d_before - penetration_tol) and (min_d_after < 0.0):
             lr *= 0.5
             print(
                 f"Iter {it}, reject step (penetration worsened: {min_d_before:.5f} -> {min_d_after:.5f}), lr -> {lr}"
             )
             if lr < 1e-6:
+                print("penetration worsened and lr is too small, RETURNING")
                 break
             continue
 
+        ### ------------------------------------------------------------- ###
+        ## Recalculate the CONTACT PAIRS ##
+        ball_geom_names = {"ball/ball_geom", "ball_geom"}
+        env.set_configuration(q_h_new)
+        geom_id_pairs_new = env.physics.data.ptr.contact.geom
+        # Get list of contact pair geoms
+        geoms_new = np.array([
+            [
+                mj.mj_id2name(env.physics.model.ptr, mj.mjtObj.mjOBJ_GEOM, geom_id)
+                for geom_id in pair
+            ]
+            for pair in geom_id_pairs_new
+        ])
+
+        # Convert MuJoCo contact pairs into an order-invariant set.
+        # This avoids subtle/incorrect behavior from `list in numpy_array`.
+        contact_pair_set_new = set()
+        for a, b in geoms_new.tolist():
+            if a is None or b is None:
+                continue
+            contact_pair_set_new.add(frozenset((a, b)))
+    
+        def has_ball_contact_new(hand_geom_name: str) -> bool:
+            return any(
+                frozenset((ball_name, hand_geom_name)) in contact_pair_set_new
+                for ball_name in ball_geom_names
+            )
+
+        # we need to recheck if the fingers are in contact with the object
+        in_contact_new = all(has_ball_contact_new(g) for g in finger_geom_names)
+        ### ------------------------------------------------------------- ###
+
+
         # Evaluate the objective function with the new joint configuration to measure improvement
-        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact, penetration_weight=20000)
+        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact_new, penetration_weight=20000)
 
         # Only update q_h if the objective function has improved
         if fval_new < fval:
@@ -156,14 +215,17 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                 history.append(q_h.copy())
             improvement = fval - fval_new 
             print(f"Iter {it}, objective={fval_new:.4f}, improvement={improvement:.4f}")
-            if improvement < 1e-6:
+            if contact_achieved and improvement < 1e-6:
+                print("improvement is too small, RETURNING")
                 break
         else:
             # If no improvement, reduce lr or break
             lr *= 0.5
             print(f"Iter {it}, no improvement, reduce lr to {lr}")
             if lr < 1e-6:
+                print("lr is too small, RETURNING")
                 break
+    print("RETURNING")
     if return_history:
         return q_h, history
     return q_h
@@ -174,6 +236,8 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
                           in_contact: bool, 
                           beta=10, 
                           penetration_weight=600,
+                          tweak_surf_penalty_at_contact=True,
+                          tweak_surf_penalty_at_contact_value=0.04,
                           sync_weight=10,
                           friction_coeff=0.5, 
                           num_friction_cone_approx=8,
@@ -222,9 +286,11 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     surface_penalty += sync_weight * sync_penalty
 
     # Inter-finger collision penalty
+    collision_total_penalty = 0.0
     collision_penalty = 0.0
-    min_finger_dist = 0.025  # meters
-    collision_weight = 100.0
+    ## THIS IS ONLY THHING CHANGED from working version,, min_finger_dist was 0.025
+    min_finger_dist = 0.04  # meters
+    collision_weight = 500.0
     n_fingers = len(finger_positions)
     for i in range(n_fingers):
         for j in range(i+1, n_fingers):
@@ -232,12 +298,43 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
             if dist < min_finger_dist:
                 print(f"Collision: Fingers {i+1} and {j+1} too close (d={dist:.4f})")
                 collision_penalty += (min_finger_dist - dist) ** 2
-    surface_penalty += collision_weight * collision_penalty
+    collision_total_penalty = collision_weight * collision_penalty
 
-    
-    if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
-        return beta * surface_penalty
+    # Recompute contact status from the current MuJoCo state after set_configuration(q_h).
+    finger_geom_names = [
+        "sawyer/allegro_right//unnamed_geom_12",
+        "sawyer/allegro_right//unnamed_geom_23",
+        "sawyer/allegro_right//unnamed_geom_34",
+        "sawyer/allegro_right//unnamed_geom_45",
+    ]
+    ball_geom_names = {"ball/ball_geom", "ball_geom"}
+    geom_id_pairs = env.physics.data.ptr.contact.geom
+    geoms = np.array([
+        [
+            mj.mj_id2name(env.physics.model.ptr, mj.mjtObj.mjOBJ_GEOM, geom_id)
+            for geom_id in pair
+        ]
+        for pair in geom_id_pairs
+    ])
+    contact_pair_set = set()
+    for a, b in geoms.tolist():
+        if a is None or b is None:
+            continue
+        contact_pair_set.add(frozenset((a, b)))
+
+    def has_ball_contact_current(hand_geom_name: str) -> bool:
+        return any(
+            frozenset((ball_name, hand_geom_name)) in contact_pair_set
+            for ball_name in ball_geom_names
+        )
+
+    in_house_in_contact = all(has_ball_contact_current(g) for g in finger_geom_names)
+
+    if not in_house_in_contact:
+        print("not in contact or less than 4 contact frames")
+        return beta * (surface_penalty) + collision_total_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
+        print("in contact and more than 4 contact frames")
         # Create friction cone
         contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
         directions_list = []
@@ -251,11 +348,15 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
         # First optimize Q+ distance until it's near zero, then switch to optimizing Q- distance
         Q_plus_dist = optimize_necessary_condition(G, env)
         if Q_plus_dist > eps:
+            print("Use necessary condition")
             score_fc = Q_plus_dist
         else:
             Q_minus_dist = optimize_sufficient_condition(G)
+            print("Use sufficient condition")
             score_fc = Q_minus_dist
-        return score_fc + beta * surface_penalty
+        final_coll_penalty_values = tweak_surf_penalty_at_contact_value *(beta * (surface_penalty) + collision_total_penalty)
+        print("final_coll_penalty_values are these :", final_coll_penalty_values)
+        return score_fc + final_coll_penalty_values
     
 def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     """
