@@ -159,6 +159,20 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     outside_distances = np.array(outside_distances)
     sync_penalty = np.var(outside_distances)
     surface_penalty += sync_weight * sync_penalty
+
+    # Inter-finger collision penalty
+    collision_penalty = 0.0
+    min_finger_dist = 0.025  # meters
+    collision_weight = 100.0
+    n_fingers = len(finger_positions)
+    for i in range(n_fingers):
+        for j in range(i+1, n_fingers):
+            dist = np.linalg.norm(finger_positions[i] - finger_positions[j])
+            if dist < min_finger_dist:
+                print(f"Collision: Fingers {i+1} and {j+1} too close (d={dist:.4f})")
+                collision_penalty += (min_finger_dist - dist) ** 2
+    surface_penalty += collision_weight * collision_penalty
+
     if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
         return beta * surface_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
@@ -277,41 +291,39 @@ def optimize_necessary_condition(G: np.array, *_):
     ----------
     G: grasp matrix
     """
-    print("Optimizing nessesary condition (Q+ distance)...")
-    # Change G to float type
+    print("Optimizing necessary condition (Q+ distance)...")
     G = np.asarray(G, dtype=float)
+    print(f"G shape: {G.shape}")
+    print(f"G rank: {np.linalg.matrix_rank(G)}")
+    print(f"G (first 3 cols):\n{G[:, :min(3, G.shape[1])].round(4)}")
+    print(f"G min: {G.min():.4e}, max: {G.max():.4e}, mean: {G.mean():.4e}")
     if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
-        # if G has no instances or the grasp matrix is not a 2D matrix
+        print("Degenerate G: not enough columns or rows.")
         return float('inf')
 
-    # N = number of adjoint grasps
     N = G.shape[1]
-    # wrench_dim = per adjoint dimension (should be 6 for 3D)
     wrench_dim = G.shape[0]
     if wrench_dim == 0:
+        print("Degenerate G: zero rows.")
         return float('inf')
+
+    # Print a warning if G is rank-deficient
+    if np.linalg.matrix_rank(G) < min(G.shape):
+        print("Warning: G is rank-deficient!")
+
+    # Print alpha0 (initial guess)
+    alpha0 = np.full(N, 1.0 / N)
+    print(f"alpha0: {alpha0[:min(5, N)]}")
 
     # Numeric matrix container (Dense Matrix) for casadi
     G_ca = ca.DM(G)
 
     opti = ca.Opti()
-    # minimizee the squared norm of wrench, alpha is the actual  grasp
     alpha = opti.variable(N, 1)
-    # multiply the grasp matrix by the adjoint grasp to get the wrench
     wrench = G_ca @ alpha
-
-    # minimize the squared norm of the wrench
     opti.minimize(ca.sumsqr(wrench))
-    # subject to the constraint that the sum of the adjoint grasps is 1
     opti.subject_to(ca.sum1(alpha) == 1)
-    # subject to the constraint that the adjoint grasps (elementwise) are non-negative
     opti.subject_to(alpha >= 0)
-
-    # uses ipopt solver to solve the optimization problem
-    # expand: True means that the solver will expand the problem into a larger problem
-    # max_iter: maximum number of iterations
-    # print_level: 0 means no output, 1 means minimal output, 2 means verbose output
-    # sb: "yes" means that the solver will use a sparse backend
     opti.solver(
         "ipopt",
         {"expand": True},
@@ -320,11 +332,17 @@ def optimize_necessary_condition(G: np.array, *_):
 
     try:
         sol = opti.solve()
-    except Exception:
-        return 0.0
+    except Exception as e:
+        print(f"Q+ solver failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1e6  # Large finite penalty
 
     alpha_star = np.array(sol.value(alpha)).reshape(-1)
-    return float(np.linalg.norm(G @ alpha_star))
+    print(f"alpha_star (first 5): {alpha_star[:min(5, len(alpha_star))]}")
+    wrench_val = G @ alpha_star
+    print(f"wrench (first 6): {wrench_val[:6]}")
+    return float(np.linalg.norm(wrench_val))
 
     
 def optimize_sufficient_condition(G: np.array, M=20):
