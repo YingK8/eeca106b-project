@@ -47,15 +47,22 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
                 for pair in geom_id_pairs
             ])
 
-            # Specify the exact geom contacts we're looking for (if you change the allegro hand urdf you might want to check that these still correspond to the fingertips)
             one   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_12']
             two   = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_23']
             three = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_34']
             four  = ['ball_geom', 'sawyer/allegro_right//unnamed_geom_45']
 
+            # Print contact status for each finger
+            for idx, (name, label) in enumerate(zip([one, two, three, four], ["Finger 1", "Finger 2", "Finger 3", "Finger 4"])):
+                if name in geoms:
+                    print(f"{label} in contact")
+                else:
+                    print(f"{label} not in contact")
+
             # Check if all four fingertips are touching the object
             if (one in geoms and two in geoms and three in geoms and four in geoms and
                     env.physics.data.ptr.contact.frame.shape[0] >= 4):
+                print("All fingers in contact with the object.")
                 in_contact = True
         
         # Evaluate the objective function and check its gradient
@@ -130,17 +137,24 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     # Penalty for distance from surface
     surface_penalty = 0.0
     outside_distances = []
-    for p in finger_positions:
+    d_signs = []
+    for idx, p in enumerate(finger_positions):
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
+        d_signs.append(np.sign(d))
+        # Print when d switches sign (penetration <-> non-penetration)
+        if hasattr(joint_space_objective, "last_d_signs"):
+            last = joint_space_objective.last_d_signs
+            if idx < len(last) and np.sign(d) != last[idx]:
+                print(f"Finger {idx+1} d switched sign at {p}: d={d:.6f}")
         # Penalize penetration more heavily so early-contact fingers do not clip through the sphere.
         if d < 0:
+            print(f"Penetration detected at finger {idx+1} ({p}), d={d:.6f}, applying extra penalty.")
             surface_penalty += penetration_weight * d * d
             outside_distances.append(0.0)
         else:
             surface_penalty += d * d
-
-            # Use outside distance for synchronization so all fingertips close in together.
             outside_distances.append(d)
+    joint_space_objective.last_d_signs = d_signs
 
     outside_distances = np.array(outside_distances)
     sync_penalty = np.var(outside_distances)
@@ -160,10 +174,12 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
 
         # First optimize Q+ distance until it's near zero, then switch to optimizing Q- distance
         Q_plus_dist = optimize_necessary_condition(G, env)
-        if Q_plus_dist > eps:
-            score_fc = Q_plus_dist
-        else:
+        print(f"Q+ distance: {Q_plus_dist:.6f} (eps={eps})")
+        score_fc = Q_plus_dist
+        if Q_plus_dist < eps:
+            print(f"Switching to sufficient condition (Q-) at Q+={Q_plus_dist:.6f}")
             Q_minus_dist = optimize_sufficient_condition(G)
+            print(f"Q- distance: {Q_minus_dist:.6f}")
             score_fc = Q_minus_dist
         return score_fc + beta * surface_penalty
     
@@ -190,6 +206,7 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     friction_cones_vecs = []
     for i in range(num_approx):
         vec =   mu * (np.cos(d_theta * i) * tangent_1 + np.sin(d_theta * i) * tangent_2) + n
+        # print("Friction cone vector:", vec)
         friction_cones_vecs.append(vec)
     return friction_cones_vecs
 
@@ -251,6 +268,7 @@ def _generate_sphere_samples(M, seed=42):
 
     return points_on_unit_sphere
 
+
 def optimize_necessary_condition(G: np.array, *_):
     """
     Returns the result of the L2 optimization on G (Q+ distance)
@@ -259,37 +277,55 @@ def optimize_necessary_condition(G: np.array, *_):
     ----------
     G: grasp matrix
     """
+    print("Optimizing nessesary condition (Q+ distance)...")
+    # Change G to float type
     G = np.asarray(G, dtype=float)
     if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
+        # if G has no instances or the grasp matrix is not a 2D matrix
         return float('inf')
 
+    # N = number of adjoint grasps
     N = G.shape[1]
+    # wrench_dim = per adjoint dimension (should be 6 for 3D)
     wrench_dim = G.shape[0]
     if wrench_dim == 0:
         return float('inf')
 
-    alpha0 = np.full(N, 1.0 / N)
+    # Numeric matrix container (Dense Matrix) for casadi
+    G_ca = ca.DM(G)
 
-    def objective(alpha):
-        wrench = G @ alpha
-        return float(wrench @ wrench)
+    opti = ca.Opti()
+    # minimizee the squared norm of wrench, alpha is the actual  grasp
+    alpha = opti.variable(N, 1)
+    # multiply the grasp matrix by the adjoint grasp to get the wrench
+    wrench = G_ca @ alpha
 
-    constraints = [{"type": "eq", "fun": lambda alpha: np.sum(alpha) - 1.0}]
-    bounds = [(0.0, None)] * N
+    # minimize the squared norm of the wrench
+    opti.minimize(ca.sumsqr(wrench))
+    # subject to the constraint that the sum of the adjoint grasps is 1
+    opti.subject_to(ca.sum1(alpha) == 1)
+    # subject to the constraint that the adjoint grasps (elementwise) are non-negative
+    opti.subject_to(alpha >= 0)
 
-    res = minimize(
-        objective,
-        alpha0,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-        options={"maxiter": 200, "ftol": 1e-9, "disp": False},
+    # uses ipopt solver to solve the optimization problem
+    # expand: True means that the solver will expand the problem into a larger problem
+    # max_iter: maximum number of iterations
+    # print_level: 0 means no output, 1 means minimal output, 2 means verbose output
+    # sb: "yes" means that the solver will use a sparse backend
+    opti.solver(
+        "ipopt",
+        {"expand": True},
+        {"max_iter": 500, "print_level": 0, "sb": "yes", "print_time": 0},
     )
 
-    if not res.success:
-        return float('inf')
+    try:
+        sol = opti.solve()
+    except Exception:
+        return 0.0
 
-    return float(np.linalg.norm(G @ res.x))
+    alpha_star = np.array(sol.value(alpha)).reshape(-1)
+    return float(np.linalg.norm(G @ alpha_star))
+
     
 def optimize_sufficient_condition(G: np.array, M=20):
     """
@@ -302,6 +338,7 @@ def optimize_sufficient_condition(G: np.array, M=20):
 
     Returns the Q- distance. Negative values indicate force-closure sufficiency.
     """
+    print("Optimizing sufficient condition (Q- distance)...")
     
     G = np.asarray(G, dtype=float)
     N = G.shape[1]
