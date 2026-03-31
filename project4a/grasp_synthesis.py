@@ -131,7 +131,9 @@ def synthesize_grasp(env: AllegroHandEnv.AllegroHandEnv,
         qpos_new = clip_to_valid_state(env.physics, qpos_new)
         q_h_new = qpos_new[env.q_h_slice].copy()
 
-        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact)
+        env.set_configuration(q_h_new)
+        in_contact_new = _in_contact_for_fc(env)
+        fval_new = joint_space_objective(env, q_h_new, fingertip_names, in_contact_new)
 
         if fval_new < fval:
             q_h = q_h_new
@@ -158,7 +160,9 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
                           beta=5, 
                           friction_coeff=0.5, 
                           num_friction_cone_approx=8,
-                          eps=0.00001):
+                          eps=0.00001,
+                          surface_target=0.004,
+                          outside_weight=8.0):
     """
     This function minimizes an objective such that the distance from the origin
     in wrench space as well as distance from fingers to object surface is minimized.
@@ -185,13 +189,17 @@ def joint_space_objective(env: AllegroHandEnv.AllegroHandEnv,
     surface_penalty = 0.0
     for p in finger_positions:
         d = env.sphere_surface_distance(p, env.sphere_center, env.sphere_radius)
-        surface_penalty += d*d
-    if not in_contact or env.physics.data.ptr.contact.frame.shape[0] < 4:
+        # Pull fingertips to a slightly inside target so collision geoms make contact.
+        outside = max(d, 0.0)
+        surface_penalty += outside_weight * (outside * outside) + (d - surface_target) ** 2
+    if not in_contact or _count_ball_hand_contacts(env) < 4:
         # return the beta * surface penalty
         return beta * surface_penalty
     else: # Fingers are in contact, so we calculate Q+ and Q- penalty
         # Create friction cone
-        contact_frames, contact_positions = env.get_contact_normals_and_positions(env.physics.data.ptr.contact)
+        contact_frames, contact_positions = _get_ball_hand_contact_frames_and_positions(env)
+        if contact_frames.shape[0] < 4:
+            return beta * surface_penalty
         directions_list = []
         for i in range(len(contact_frames)):
             contact_frame = contact_frames[i]
@@ -224,7 +232,7 @@ def build_friction_cone(normal: np.array, mu=0.5, num_approx=4):
     friction_cone_vectors: array of discretized friction cone vectors around the given normal
     """
     n = normal[0:3]
-    n = n / max(np.linalg.norm(n), 1e-12)
+    # n = n / max(np.linalg.norm(n), 1e-12)
     tangent_1 = normal[3:6]
     tangent_2 = normal[6:9]
     
@@ -346,6 +354,7 @@ def optimize_necessary_condition(G: np.array, *_):
     
     
 
+
 def optimize_sufficient_condition(G: np.array, M=20):
     """
     Runs the optimization from the project spec to evaluate Q- distance. 
@@ -357,52 +366,45 @@ def optimize_sufficient_condition(G: np.array, M=20):
 
     Returns the Q- distance. Negative values indicate force-closure sufficiency.
     """
-
-    G = np.asarray(G, dtype=float)
-    if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
-        return float('inf')
-
+    
+    N = G.shape[1] # grasp matrix has dimension (6, N); N = number of cone directions
     wrench_dim = G.shape[0]
-    if wrench_dim != 6:
-        return float('inf')
 
-    if np.linalg.matrix_rank(G) < wrench_dim:
-        return 0.0
+    G_ca = ca.DM(G) # CasADi matrix version of G, same shape (wrench_dim, N).
 
-    Q = _generate_sphere_samples(M)
-    N = G.shape[1]
-    G_ca = ca.DM(G)
+    Q = _generate_sphere_samples(M) #returns (6, M). Column k is q_k.
 
-    d_k_values = []
-    for q_k in Q:
-        opti = ca.Opti()
+    d_q_vals = [] # Store d_Q(k) = -r_k for each sampled direction.
+    
+    # Solve M optimization problems for the biggest ball in each direction q_k (and then find the smallest such radius):
+    for k in range(M):
+        opti = ca.Opti() 
 
-        alpha = opti.variable(N, 1)
-        r = opti.variable()
-        q_ca = ca.DM(q_k).reshape((6, 1))
+        r = opti.variable() # r: scalar radius along q_k.
+        alpha = opti.variable(N, 1) # alpha: convex weights over columns of G, shape (N, 1).
 
-        # max r s.t. G alpha = r q_k, alpha in simplex, r >= 0.
-        # Equivalent NLP for IPOPT: min -r.
+        qk = ca.DM(Q[:, k]).reshape((wrench_dim, 1)) # q_k is a column vector of shape (wrench_dim, 1).
+
         opti.minimize(-r)
-        opti.subject_to(G_ca @ alpha == r * q_ca)
+
+        opti.subject_to(G_ca @ alpha == r * qk)
         opti.subject_to(ca.sum1(alpha) == 1)
         opti.subject_to(alpha >= 0)
+
+        # Radius must be nonnegative.
         opti.subject_to(r >= 0)
 
         opti.solver(
             "ipopt",
             {"expand": True},
-            {"max_iter": 500, "print_level": 0, "sb": "yes", "print_time": 0},
+            {"max_iter": 500, "print_level": 0, "sb": "yes"},
         )
 
         try:
             sol = opti.solve()
-            r_star = float(sol.value(r))
-            d_k_values.append(-r_star)
-        except Exception:
-            # Infeasible direction => no positive interior radius along this ray.
-            d_k_values.append(0.0)
+            d_q_vals.append(float(sol.value(r)))
+        except:
+            continue
 
-    if not d_k_values:
-        return float('inf')
-    return float(np.max(d_k_values))
+    # return the smallest radius allowed (multiplied by -1 for some reason)
+    return -min(d_q_vals)
