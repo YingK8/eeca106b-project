@@ -36,12 +36,13 @@ def clip_to_valid_state(physics: dm_control.mjcf.physics.Physics, qpos: np.array
 
     return qpos_clipped
 
-def numeric_gradient(function: types.FunctionType, 
-                     q_h: np.array, 
-                     env: AllegroHandEnv, 
-                     fingertip_names: list[str], 
-                     in_contact: bool, 
-                     eps=0.01):
+def numeric_gradient(function: types.FunctionType,
+                     q_h: np.array,
+                     env: AllegroHandEnv,
+                     fingertip_names: list[str],
+                     in_contact: bool,
+                     beta=None,
+                     eps=1e-3):
     """
     This function approximates the gradient of the joint_space_objective
 
@@ -58,13 +59,29 @@ def numeric_gradient(function: types.FunctionType,
     ------
     Approximate gradient of the inputted function
     """
-    baseline = function(env, q_h, fingertip_names, in_contact)
+    if beta is None:
+        baseline = function(env, q_h, fingertip_names, in_contact)
+    else:
+        baseline = function(env, q_h, fingertip_names, in_contact, beta=beta)
+
+    if not np.isfinite(baseline):
+        return np.zeros_like(q_h)
+
     grad = np.zeros_like(q_h)
     for i in range(len(q_h)):
         q_h_pert = q_h.copy()
         q_h_pert[i] += eps
-        val_pert = function(env, q_h_pert, fingertip_names, in_contact)
-        grad[i] = (val_pert - baseline) / eps
+        if beta is None:
+            val_pert = function(env, q_h_pert, fingertip_names, in_contact)
+        else:
+            val_pert = function(env, q_h_pert, fingertip_names, in_contact, beta=beta)
+
+        if not np.isfinite(val_pert):
+            grad[i] = 0.0
+        else:
+            grad[i] = (val_pert - baseline) / eps
+
+    grad[~np.isfinite(grad)] = 0.0
     return grad
 
 def quaternion_error_naive(current_quat: np.array, target_quat: np.array):

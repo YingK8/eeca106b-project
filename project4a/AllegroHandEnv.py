@@ -48,10 +48,38 @@ class AllegroHandEnv:
             or (mj.mj_id2name(model_ptr, mj.mjtObj.mjOBJ_GEOM, pair[1]) == self.object_name))
         ]
 
-        contact_normals = np.array([contact_struct.frame[i] for i in indices])
-        contact_positions = np.array([contact_struct.pos[i] for i in indices])
-        # Negate normal vectors so they point towards the object
-        contact_normals[:, :3] *= -1
+        if not indices:
+            # No valid contacts
+            return np.zeros((0, 9)), np.zeros((0, 3))
+
+        normals_list = []
+        for i in indices:
+            frame = contact_struct.frame[i]
+            arr = np.array(frame)
+            if arr.shape == ():
+                print(f"Warning: contact_struct.frame[{i}] is scalar, replacing with zeros.")
+                arr = np.zeros(9)
+            elif arr.size != 9:
+                print(f"Warning: contact_struct.frame[{i}] has size {arr.size}, replacing with zeros.")
+                arr = np.zeros(9)
+            normals_list.append(arr)
+        contact_normals = np.vstack(normals_list) if normals_list else np.zeros((0, 9))
+
+        positions_list = []
+        for i in indices:
+            pos = contact_struct.pos[i]
+            arr = np.array(pos)
+            if arr.shape == ():
+                arr = np.zeros(3)
+            elif arr.size != 3:
+                arr = np.zeros(3)
+            positions_list.append(arr)
+        contact_positions = np.vstack(positions_list) if positions_list else np.zeros((0, 3))
+
+        # Negate normal vectors so they point towards the object, only if valid 2D
+        # Only negate if valid 2D array
+        if contact_normals.ndim == 2 and contact_normals.shape[0] > 0 and contact_normals.shape[1] >= 3:
+            contact_normals[:, :3] *= -1
         return contact_normals, contact_positions
 
 class AllegroHandEnvSphere(AllegroHandEnv):
