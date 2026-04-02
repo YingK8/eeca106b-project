@@ -3,6 +3,7 @@ from scipy.optimize import linprog, minimize
 import AllegroHandEnv
 import mujoco as mj
 from utils import *
+import grasp_synthesis
 
 import casadi as ca
 
@@ -364,62 +365,53 @@ def _generate_sphere_samples(M, seed=42):
 
     return points_on_unit_sphere
 
-def optimize_necessary_condition(G: np.array, *_):
+def optimize_necessary_condition(G: np.array, env: grasp_synthesis.AllegroHandEnv):
     """
     Returns the result of the L2 optimization on G (Q+ distance)
 
     Parameters
     ----------
     G: grasp matrix
+    env: AllegroHandEnv instance (can use to access physics)
     """
-    # Change G to float type
-    G = np.asarray(G, dtype=float)
-    if G.ndim != 2 or G.size == 0 or G.shape[1] == 0:
-        # if G has no instances or the grasp matrix is not a 2D matrix
-        return float('inf')
+    #YOUR CODE HERE
 
-    # N = number of adjoint grasps
-    N = G.shape[1]
-    # wrench_dim = per adjoint dimension (should be 6 for 3D)
-    wrench_dim = G.shape[0]
-    if wrench_dim == 0:
-        return float('inf')
+    # extract variable dimensions
+    N_ = G.shape[1] # number of force magitudes, one for each cone direction
 
-    # Numeric matrix container (Dense Matrix) for casadi
-    G_ca = ca.DM(G)
-
+    # construct a casadi optimization problem
     opti = ca.Opti()
-    # minimizee the squared norm of wrench, alpha is the actual  grasp
-    alpha = opti.variable(N, 1)
-    # multiply the grasp matrix by the adjoint grasp to get the wrench
-    wrench = G_ca @ alpha
-
-    # minimize the squared norm of the wrench
-    opti.minimize(ca.sumsqr(wrench))
-    # subject to the constraint that the sum of the adjoint grasps is 1
-    opti.subject_to(ca.sum1(alpha) == 1)
-    # subject to the constraint that the adjoint grasps (elementwise) are non-negative
-    opti.subject_to(alpha >= 0)
-
-    # uses ipopt solver to solve the optimization problem
-    # expand: True means that the solver will expand the problem into a larger problem
-    # max_iter: maximum number of iterations
-    # print_level: 0 means no output, 1 means minimal output, 2 means verbose output
-    # sb: "yes" means that the solver will use a sparse backend
+    # define variables and parameters
+    X = opti.variable(N_, 1)    # (N= num_appro * num_contact,)
+    # set initial and constraints
+    opti.set_initial(X[:], 0.0)
+    # eps_ = 1e-7
+    eps_ = 0.0
+    opti.subject_to(X[:] >= eps_)
+    opti.subject_to(ca.sum1(X) == 1)
+    
+    # define objective function
+    J_cost = (X.T @ G.T) @ (G @ X)
+    opti.minimize(J_cost)
+    
+    # set solver
     opti.solver(
         "ipopt",
-        {"expand": True},
-        {"max_iter": 500, "print_level": 0, "sb": "yes", "print_time": 0},
+        {"expand": True, "print_time": False},
+        {"max_iter": 3000, "print_level": 1, "sb": "yes"}
     )
 
-    try:
-        sol = opti.solve()
-    except Exception:
-        return float('inf')
-
-    alpha_star = np.array(sol.value(alpha)).reshape(-1)
-    return float(np.linalg.norm(G @ alpha_star))
+    # solve the optimization problem
+    sol = opti.solve()
     
+    # obtain the optimization output
+    alpha_vec = np.array(sol.value(X[:])).flatten().reshape(N_,1)
+
+    return np.sqrt( (alpha_vec.T @ G.T) @ (G @ alpha_vec) ).squeeze()
+    # return ( (alpha_vec.T @ G.T) @ (G @ alpha_vec)).squeeze()
+
+
+
 def optimize_sufficient_condition(G: np.array, M=20):
     """
     Runs the optimization from the project spec to evaluate Q- distance. 
@@ -429,37 +421,56 @@ def optimize_sufficient_condition(G: np.array, M=20):
     G: grasp matrix
     M: number of approximations to the norm ball
 
-    Returns the Q- distance. Negative values indicate force-closure sufficiency.
+    Returns the Q- distance
     """
-    
-    G = np.asarray(G, dtype=float)
-    N = G.shape[1]
-    wrench_dim = G.shape[0]
-    Q = _generate_sphere_samples(M)
+    # extract dimensions
+    D_, N_ = G.shape        # dimension of workspace and number of friction cone boundary vectors
+    q_M_arr = _generate_sphere_samples(dim=D_, num_pts=M).T  # (D_, M)
 
-    c = np.zeros(N + 1)
-    c[-1] = -1.0
-    bounds = [(0.0, None)] * N + [(0.0, None)]
+    ## 1. construct a casadi optimization problem
+    opti = ca.Opti()
 
-    d_q_vals = []
+    ## 2. define variables and parameters
+    # paramters that remain constant during optimization
+    G_mat = opti.parameter(D_, N_)  # grasp matrix
+    Q_mat = opti.parameter(D_, M)   # directions matrix
+    opti.set_value(G_mat, G)        
+    opti.set_value(Q_mat, q_M_arr)
+    # decision variables to be changed during the optimization
+    r = opti.variable()             # ball radius
+    A = opti.variable(N_, M)        # force matrix, each col. is a force vector for one direction
 
-    # LP in variables [alpha_1 ... alpha_N r] for each sampled direction q_k.
+    ## 3. set initial and constraints
+    # initial values for decision variables
+    eps_ = 0.0 # [MT]: may consider a value >0 for numerical stability
+    opti.set_initial(r, eps_)
+    opti.set_initial(A, eps_)
+    # constraints
+    opti.subject_to(r >= eps_)
+    opti.subject_to(ca.vec(A) >= eps_)
+    # apply constraints to each direction in the sphere
     for k in range(M):
-        qk = Q[:, k]
+        opti.subject_to(ca.sum1(A[:, k]) == 1)
+        opti.subject_to(G_mat @ A[:, k] == Q_mat[:, k] * r)
 
-        A_eq = np.zeros((wrench_dim + 1, N + 1))
-        A_eq[:wrench_dim, :N] = G
-        A_eq[:wrench_dim, -1] = -qk
-        A_eq[wrench_dim, :N] = 1.0
+    ## 4. define objective function
+    # maximize common radius, 
+    # referring to the max ball radius around origin within discretized friction cone
+    opti.minimize(-r)
 
-        b_eq = np.zeros(wrench_dim + 1)
-        b_eq[wrench_dim] = 1.0
+    ## 5 set solver and solve the optimization problem
+    opti.solver(
+        "ipopt",
+        {"expand": True, "print_time": False},
+        {"max_iter": 3000, "print_level": 1}
+    )
 
-        res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
-        if res.success:
-            d_q_vals.append(float(res.x[-1]))
-
-    if not d_q_vals:
-        return 0.0
-
-    return -min(d_q_vals)
+    # optimization problem may not be always well constructed, using try-except
+    try:
+        sol = opti.solve()
+        return -float(sol.value(r)) # notice the negative sign
+    except Exception as err:
+        if 1:
+            print(err)
+    
+    return 0.0  # return 0.0 radius if no valid solution

@@ -2,6 +2,7 @@ import numpy as np
 import dm_control
 import mujoco as mj
 
+
 class AllegroHandEnv:
     def __init__(self, physics: dm_control.mjcf.physics.Physics, 
                  q_h_slice: slice, 
@@ -11,6 +12,26 @@ class AllegroHandEnv:
         self.q_h_slice = q_h_slice
         self.num_fingers = num_fingers
         self.object_name = object_name
+
+    def get_fingertip_jacobian(self, tip_name: str) -> np.ndarray:
+        """
+        Returns the 3xN Jacobian for the given fingertip body, mapping hand joint velocities to fingertip Cartesian velocity.
+        N = number of hand joints (typically 16 for Allegro hand).
+        """
+        # Get the body id for the fingertip
+        body_id = self.physics.model.body(tip_name).id
+        # Number of DoFs in the model
+        n_dof = self.physics.model.nv
+        # Jacobian buffer: (3, n_dof)
+        jacp = np.zeros((3, n_dof))
+        # Compute translational Jacobian for the body CoM
+        mj.mj_jacBodyCom(self.physics.model.ptr, self.physics.data.ptr, jacp, None, body_id)
+        # Only keep columns for hand joints
+        if hasattr(self, 'q_h_slice'):
+            jacp_hand = jacp[:, self.q_h_slice]
+        else:
+            jacp_hand = jacp
+        return jacp_hand
 
     def set_configuration(self, q_h: np.array):
         self.physics.data.qpos[self.q_h_slice] = q_h
