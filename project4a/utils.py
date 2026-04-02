@@ -11,28 +11,43 @@ def clip_to_valid_state(physics: dm_control.mjcf.physics.Physics, qpos: np.array
     qpos_clipped = qpos.copy()
 
     for joint_idx in range(physics.model.njnt):
-        qadr = physics.model.jnt_qposadr[joint_idx]
-        joint_type = int(physics.model.jnt_type[joint_idx])
+        joint_range = physics.model.jnt_range[joint_idx]
 
-        # MuJoCo joint type ids: free=0, ball=1, slide=2, hinge=3.
-        if joint_type in (2, 3):
-            if bool(physics.model.jnt_limited[joint_idx]):
-                joint_range = physics.model.jnt_range[joint_idx]
-                qpos_clipped[qadr] = np.clip(qpos_clipped[qadr], joint_range[0], joint_range[1])
-        elif joint_type == 0:
-            quat = qpos_clipped[qadr + 3 : qadr + 7]
-            quat_norm = np.linalg.norm(quat)
-            if quat_norm < 1e-12:
-                qpos_clipped[qadr + 3 : qadr + 7] = np.array([1.0, 0.0, 0.0, 0.0])
-            else:
-                qpos_clipped[qadr + 3 : qadr + 7] = quat / quat_norm
-        elif joint_type == 1:
-            quat = qpos_clipped[qadr : qadr + 4]
-            quat_norm = np.linalg.norm(quat)
-            if quat_norm < 1e-12:
-                qpos_clipped[qadr : qadr + 4] = np.array([1.0, 0.0, 0.0, 0.0])
-            else:
-                qpos_clipped[qadr : qadr + 4] = quat / quat_norm
+        qpos_clipped[physics.model.jnt_qposadr[joint_idx]] = np.clip(
+            qpos_clipped[physics.model.jnt_qposadr[joint_idx]], 
+            joint_range[0],
+            joint_range[1])
+
+    return qpos_clipped
+
+# [MT]
+def clip_to_valid_state_slice(physics: dm_control.mjcf.physics.Physics, qpos: np.array, q_slice: slice=None):
+    """
+    This function returns qpos with every value clipped to the allowable joint range as specified
+    in the MJCF, allowing user to specify a slice
+    """
+    
+    if not q_slice:
+        qpos_clipped = qpos.copy()
+        for joint_idx in range(physics.model.njnt):
+            joint_range = physics.model.jnt_range[joint_idx]
+
+            qpos_clipped[physics.model.jnt_qposadr[joint_idx]] = np.clip(
+                qpos_clipped[physics.model.jnt_qposadr[joint_idx]], 
+                joint_range[0],
+                joint_range[1])
+    else:
+        # if a slice of the model joints are specified
+        qpos_full           = physics.data.qpos.copy()
+        qpos_full[q_slice]  = qpos.copy()
+        for joint_idx in range(physics.model.njnt):
+            joint_range = physics.model.jnt_range[joint_idx]
+
+            qpos_full[physics.model.jnt_qposadr[joint_idx]] = np.clip(
+                qpos_full[physics.model.jnt_qposadr[joint_idx]], 
+                joint_range[0],
+                joint_range[1])
+        qpos_clipped = qpos_full[q_slice]
 
     return qpos_clipped
 
@@ -58,12 +73,14 @@ def numeric_gradient(function: types.FunctionType,
     ------
     Approximate gradient of the inputted function
     """
-    baseline = function(env, q_h, fingertip_names, in_contact)
+    # baseline = function(q_h, env, fingertip_names, in_contact)  # original `starter`
+    baseline = function(env, q_h, fingertip_names, in_contact)  # updated `starter`
     grad = np.zeros_like(q_h)
     for i in range(len(q_h)):
         q_h_pert = q_h.copy()
         q_h_pert[i] += eps
-        val_pert = function(env, q_h_pert, fingertip_names, in_contact)
+        # val_pert = function(q_h_pert, env, fingertip_names, in_contact) # original `starter`
+        val_pert = function(env, q_h_pert, fingertip_names, in_contact) # updated `starter`
         grad[i] = (val_pert - baseline) / eps
     return grad
 
@@ -91,3 +108,22 @@ def quat_multiply(q1: np.array, q2: np.array):
 def quat_conjugate(q: np.array):
     """Return quaternion conjugate: [w, -x, -y, -z]."""
     return np.array([q[0], -q[1], -q[2], -q[3]])
+
+# [MT]
+def sampleRandomPointOnHypersphere(dim: int, 
+                                   num_pts: int,
+                                   rng = None,
+                                   ) -> np.ndarray:
+    '''
+    Muller (1959) and Marsaglia (1972)
+    Random point on a hypersphere S^{n-1}
+    Sample an n-D standard normal vector then normalize
+    Input:
+        dim:        int, dimension of the Euclidean vector, Isomorphic to S^{n-1}
+        num_pts:    int, number of random points to be generated
+        rng:        random number generator,
+    '''
+    rng = np.random.default_rng(rng)
+    Vec = rng.normal(size = (num_pts, dim))
+    return Vec / np.linalg.norm(Vec, axis=1, keepdims=True)
+
