@@ -44,4 +44,20 @@ def fingertip_to_object_distances(
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
 ) -> torch.Tensor:
     """TODO: implement fingertip-to-object distances for the selected fingertip bodies."""
-    raise NotImplementedError("TODO: implement fingertip_to_object_distances")
+    
+    finger_tips = ["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"]
+    
+    robot_cfg.resolve(env.scene)
+    object_cfg.resolve(env.scene)
+    
+    robot = env.scene[robot_cfg.name]
+    obj = env.scene[object_cfg.name]
+
+    all_body_names = robot.data.body_names
+    finger_indices = [all_body_names.index(name) for name in finger_tips]
+
+    tip_poses_w = robot.data.body_pos_w[:, finger_indices, :]
+    obj_pos_w = obj.data.root_pos_w
+
+    distances = torch.linalg.norm(tip_poses_w - obj_pos_w[:, None, :], dim=-1)
+    return distances

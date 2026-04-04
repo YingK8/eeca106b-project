@@ -135,7 +135,10 @@ class ObservationsCfg:
             params={"asset_cfg": SceneEntityCfg("object")},
         )
         # TODO: add fingertip_to_object_distances here.
-        # fingertip_to_object_distances = ...
+        fingertip_to_object_distances = ObsTerm(
+            func=mdp.fingertip_to_object_distances, 
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("object"),},
+        )
 
         # -- command terms
         goal_pose = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
@@ -168,7 +171,7 @@ class ObservationsCfg:
             self.object_lin_vel = None
             self.object_ang_vel = None
             # TODO: if you add fingertip_to_object_distances above, disable it for NoVelocityKinematicObsGroupCfg.
-            # self.fingertip_to_object_distances = None
+            self.fingertip_to_object_distances = None
 
     # observation groups
     # NOTE: Keep the default env on the full kinematic observations so the
