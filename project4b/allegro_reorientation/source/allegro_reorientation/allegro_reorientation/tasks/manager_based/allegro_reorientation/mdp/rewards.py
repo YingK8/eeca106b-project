@@ -100,8 +100,14 @@ def object_spin_l2(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
 ) -> torch.Tensor:
-    """TODO: implement a penalty term for excessive object spin."""
-    raise NotImplementedError("TODO: implement object_spin_l2")
+    """Penalty for excessive object spin (always active).
+
+    Returns the L2 norm of the object's angular velocity to discourage unnecessary
+    spinning
+    TODO: implement a penalty term for excessive object spin."""
+    asset: RigidObject = env.scene[object_cfg.name]
+    # angular velocity in world frame, shape: (num_envs, 3)
+    return torch.linalg.norm(asset.data.root_ang_vel_w, dim=-1)
 
 
 def object_spin_near_goal_l2(
@@ -110,5 +116,23 @@ def object_spin_near_goal_l2(
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
     angle_threshold: float = 0.2,
 ) -> torch.Tensor:
-    """TODO: implement a spin penalty that is only active near the goal orientation."""
-    raise NotImplementedError("TODO: implement object_spin_near_goal_l2")
+    """Penalty for excessive object spin (active only when near the goal orientation)
+
+    Returns the L2 norm of the object's angular velocity masked by whether the
+    object is within angle_threshold radians of the goal. This settles the policy smoothly 
+    once close to the target.
+    TODO: implement a spin penalty that is only active near the goal orientation."""
+    
+    asset: RigidObject = env.scene[object_cfg.name]
+    command_term: InHandReOrientationCommand = env.command_manager.get_term(command_name)
+
+    # compute orientation error between current and goal
+    goal_quat_w = command_term.command[:, 3:7]
+    dtheta = math_utils.quat_error_magnitude(asset.data.root_quat_w, goal_quat_w)
+
+    # binary mask: 1.0 when within threshold, 0.0 otherwise
+    near_goal = (dtheta <= angle_threshold).float()
+
+    # L2 norm of angular velocity, zeroed out when far from goal
+    ang_vel_magnitude = torch.linalg.norm(asset.data.root_ang_vel_w, dim=-1)
+    return near_goal * ang_vel_magnitude

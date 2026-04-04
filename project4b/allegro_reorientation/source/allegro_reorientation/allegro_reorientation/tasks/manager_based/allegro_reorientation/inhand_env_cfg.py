@@ -134,11 +134,12 @@ class ObservationsCfg:
             noise=Gnoise(std=0.002),
             params={"asset_cfg": SceneEntityCfg("object")},
         )
-        # TODO: add fingertip_to_object_distances here.
-        fingertip_to_object_distances = ObsTerm(
-            func=mdp.fingertip_to_object_distances, 
-            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("object"),},
-        )
+        # Task 3: fingertip-to-object distances.
+        # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
+        # fingertip_to_object_distances = ObsTerm(
+        #     func=mdp.fingertip_to_object_distances,
+        #     params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("object")},
+        # )
 
         # -- command terms
         goal_pose = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
@@ -286,12 +287,29 @@ class RewardsCfg:
     joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-2.5e-5)
     action_l2 = RewTerm(func=mdp.action_l2, weight=-0.0001)
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
-
+    
     # -- optional penalties (these are disabled by default)
     # TODO: add object_spin_l2 reward term here.
     # object_spin_l2 = ...
     # TODO: add object_spin_near_goal_l2 reward term here.
     # object_spin_near_goal_l2 = ...
+
+    # NOTE: Enable exactly ONE of these two for each training run. Do NOT enable both.
+    # NOTE: For Task 4 training, also disable fingertip_to_object_distances in KinematicObsGroupCfg.
+
+    # Run 1: always-active spin penalty (comment out for Run 2)
+    object_spin_l2 = RewTerm(
+        func=mdp.object_spin_l2,
+        weight=-1e-2,
+        params={"object_cfg": SceneEntityCfg("object")},
+    )
+
+    # Run 2: near-goal spin penalty (uncomment for Run 2, comment out object_spin_l2 above)
+    # object_spin_near_goal_l2 = RewTerm(
+    #     func=mdp.object_spin_near_goal_l2,
+    #     weight=-1e-2,
+    #     params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2},
+    # )
     
     
     # NOTE: Leave this unchanged.
