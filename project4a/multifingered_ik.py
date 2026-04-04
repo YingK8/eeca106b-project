@@ -154,7 +154,7 @@ class LevenbergMarquardtIK:
             try:
                 delta_q = np.linalg.solve(H, rhs)
             except np.linalg.LinAlgError:
-                lambda_damping *= 10.0
+                # lambda_damping *= 10.0
                 delta_q = np.linalg.pinv(H) @ rhs
 
             # q += step_size * delta_q, then enforce joint limits.
