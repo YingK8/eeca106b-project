@@ -1,0 +1,69 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+logs/
+outputs/
+wandb/
+.neptune/
+build/
+install/
+log/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments / Conda
+.venv/
+venv/
+env/
+ENV/
+.conda/
+*.egg-info/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# ROS2 / colcon workspace artifacts
+build/
+install/
+log/
+cube_rotation_ws/build/
+cube_rotation_ws/install/
+cube_rotation_ws/log/
+
+# CMake / build systems
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
+
+# Project-specific local files
+*.bak
+*.tmp
+
+# Optional large artifacts
+*.pt
+*.pth
+*.ckpt

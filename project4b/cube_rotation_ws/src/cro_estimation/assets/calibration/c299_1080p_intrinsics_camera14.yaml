@@ -1,0 +1,16 @@
+%YAML:1.0
+---
+image_width: 1920
+image_height: 1080
+rms: 1.4523702403890253
+reprojection_rmse: 1.4523705343839537
+camera_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [1542.69222, 0, 847.712631, 0, 1522.50691, 455.498229, 0, 0, 1]
+dist_coeffs: !!opencv-matrix
+  rows: 1
+  cols: 5
+  dt: d
+  data: [-0.01275286, 0.1794, -0.00665621, -0.02183943, -0.31251765]

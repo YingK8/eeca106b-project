@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: allegro_hand_controllers
+    relative_path: urdf/allegro_hand_description_right_B.urdf
+  srdf:
+    relative_path: config/allegro_hand.srdf
+  package_settings:
+    author_name: Hibo
+    author_email: sh-yang@wonik.com
+    generated_timestamp: 1723508258
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
