@@ -12,7 +12,7 @@ import kornia
 import numpy as np
 import rclpy
 import torch
-from scipy.spatial.transform import Rotation
+#from scipy.spatial.transform import Rotation
 from geometry_msgs.msg import PoseStamped
 from perseus_detector.detector.models import KeypointCNN
 from rclpy.node import Node
@@ -68,9 +68,41 @@ T_W_H[:3, :3] = np.array([
     [0, np.sin(theta),  np.cos(theta)]
 ])
 
+import numpy as np
+
 def _rotmat_to_quat_xyzw(rot: np.ndarray) -> np.ndarray:
-    # returns (x, y, z, w).
-    return Rotation.from_matrix(rot).as_quat()
+    """Convert a 3x3 rotation matrix to quaternion (x, y, z, w)."""
+    m = rot
+    trace = np.trace(m)
+
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (m[2, 1] - m[1, 2]) * s
+        y = (m[0, 2] - m[2, 0]) * s
+        z = (m[1, 0] - m[0, 1]) * s
+    else:
+        # Find the largest diagonal element
+        if m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
+            w = (m[2, 1] - m[1, 2]) / s
+            x = 0.25 * s
+            y = (m[0, 1] + m[1, 0]) / s
+            z = (m[0, 2] + m[2, 0]) / s
+        elif m[1, 1] > m[2, 2]:
+            s = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
+            w = (m[0, 2] - m[2, 0]) / s
+            x = (m[0, 1] + m[1, 0]) / s
+            y = 0.25 * s
+            z = (m[1, 2] + m[2, 1]) / s
+        else:
+            s = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
+            w = (m[1, 0] - m[0, 1]) / s
+            x = (m[0, 2] + m[2, 0]) / s
+            y = (m[1, 2] + m[2, 1]) / s
+            z = 0.25 * s
+
+    return np.array([x, y, z, w])
 
 
 class LogitechCamera:

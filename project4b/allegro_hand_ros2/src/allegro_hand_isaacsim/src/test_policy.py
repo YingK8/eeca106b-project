@@ -14,7 +14,7 @@ class TestPolicyNode(Node):
         super().__init__('test_policy_node')
 
         # Parameters
-        self.declare_parameter('policy_path', '/path/to/exported/policy.pt')
+        self.declare_parameter('policy_path', '/home/cc/ee106b/sp26/class/ee106b-aau/106b-sp26-labs-starter/project4b/allegro_reorientation/logs/rsl_rl/exported/exported_checkpoint_task3.pt')
         self.declare_parameter('orientation_success_threshold', 1.0) # radians
         self.declare_parameter('action_scale', 1.0)
 

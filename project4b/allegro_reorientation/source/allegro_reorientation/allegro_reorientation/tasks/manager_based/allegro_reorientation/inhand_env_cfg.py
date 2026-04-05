@@ -136,12 +136,12 @@ class ObservationsCfg:
         )
         # Task 3: fingertip-to-object distances.
         # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
-        # fingertip_to_object_distances = ObsTerm(
-        #     func=mdp.fingertip_to_object_distances,
-        #     params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
-        #         )
-        #     }
-        # )
+        fingertip_to_object_distances = ObsTerm(
+            func=mdp.fingertip_to_object_distances,
+            params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
+                )
+            }
+        )
 
         # -- command terms
         goal_pose = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})

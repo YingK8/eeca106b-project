@@ -7,6 +7,7 @@
 
 import argparse
 import os
+
 import sys
 
 from isaaclab.app import AppLauncher
@@ -70,6 +71,7 @@ import isaaclab_tasks  # noqa: F401, E402
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 from allegro_reorientation.assets.robots.allegro import apply_allegro_hand_preset  # noqa: E402
 
+import allegro_reorientation.tasks
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
