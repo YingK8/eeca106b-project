@@ -136,3 +136,20 @@ def object_spin_near_goal_l2(
     # L2 norm of angular velocity, zeroed out when far from goal
     ang_vel_magnitude = torch.linalg.norm(asset.data.root_ang_vel_w, dim=-1)
     return near_goal * ang_vel_magnitude
+
+def object_spin_xz_axis_penalty(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object")
+):
+    """Penalize the x and z axis direction twisting because they seem to be the hardest in the visualization"""
+    """Penalize the angular velocity that the object obtains"""
+    asset: RigidObject = env.scene[object_cfg.name]
+
+    # (num_envs, 3) -> [wx, wy, wz]
+    ang_vel = asset.data.root_ang_vel_w
+
+    # keep only x and z components
+    ang_vel_xz = ang_vel[:, [0, 2]]
+
+    ## L2 Norm
+    return torch.linalg.norm(ang_vel_xz, dim=-1)
