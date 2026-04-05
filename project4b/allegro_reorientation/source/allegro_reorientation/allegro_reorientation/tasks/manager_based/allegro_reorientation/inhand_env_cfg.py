@@ -136,12 +136,12 @@ class ObservationsCfg:
         )
         # Task 3: fingertip-to-object distances.
         # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
-        fingertip_to_object_distances = ObsTerm(
-            func=mdp.fingertip_to_object_distances,
-            params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
-                )
-            }
-        )
+        # fingertip_to_object_distances = ObsTerm(
+        #     func=mdp.fingertip_to_object_distances,
+        #     params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
+        #         )
+        #     }
+        # )
 
         # -- command terms
         goal_pose = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
@@ -304,7 +304,7 @@ class RewardsCfg:
     # object_spin_l2 = RewTerm(func=mdp.object_spin_l2, weight=-1e-2, params={"object_cfg": SceneEntityCfg("object")})
 
     # Run 2: near-goal spin penalty (uncomment for Run 2, comment out object_spin_l2 above)
-    # object_spin_near_goal_l2 = RewTerm(func=mdp.object_spin_near_goal_l2, weight=-1e-2,params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2})
+    object_spin_near_goal_l2 = RewTerm(func=mdp.object_spin_near_goal_l2, weight=-1e-2,params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2})
     
     
     # NOTE: Leave this unchanged.

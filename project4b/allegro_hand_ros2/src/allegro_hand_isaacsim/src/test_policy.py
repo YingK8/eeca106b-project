@@ -7,7 +7,7 @@ from geometry_msgs.msg import PoseStamped
 import torch
 import numpy as np
 from policy_wrapper_real_world import (RslRlPolicyWrapperRealWorld, generate_goal_pose, goal_quat_diff,
-                                        real2sim_joints, allegro_fingertip_distances, quat_mul, quat_conjugate)
+                                        real2sim_joints, quat_mul, quat_conjugate)
 
 class TestPolicyNode(Node):
 
@@ -15,7 +15,7 @@ class TestPolicyNode(Node):
         super().__init__('test_policy_node')
 
         # Parameters
-        self.declare_parameter('policy_path', '/home/cc/ee106b/sp26/class/ee106b-aau/106b-sp26-labs-starter/project4b/allegro_reorientation/logs/rsl_rl/exported/exported_checkpoint_task3.pt')
+        self.declare_parameter('policy_path', '/home/cc/ee106b/sp26/class/ee106b-aau/106b-sp26-labs-starter/project4b/allegro_reorientation/logs/rsl_rl/exported/exported_checkpoint_task42.pt')
         self.declare_parameter('orientation_success_threshold', 1.0) # radians
         self.declare_parameter('action_scale', 1.0)
 
@@ -192,8 +192,6 @@ class TestPolicyNode(Node):
         self._prev_cube_quat = cube_quat.copy()
         self._prev_cube_time = now
 
-        # -- fingertip-to-object distances (approximate FK, matches sim obs order)
-        fingertip_dists = allegro_fingertip_distances(joint_state, cube_position)
 
         # -- command / action terms
         goal_pose = np.concatenate([self.goal_pos, self.goal_quat]).copy()
@@ -219,11 +217,11 @@ class TestPolicyNode(Node):
             cube_quat,         # 4
             object_lin_vel,    # 3
             object_ang_vel,    # 3
-            fingertip_dists,   # 4
+            # fingertip_dists removed: task4 checkpoint trained without this term (72 dims)
             goal_pose,         # 7
             quat_difference,   # 4
             last_action,       # 16
-        ])  # total: 76
+        ])  # total: 72
 
         if not self.initialized_buffer:
             self.policy.reset()
