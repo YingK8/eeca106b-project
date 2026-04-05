@@ -138,7 +138,9 @@ class ObservationsCfg:
         # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
         # fingertip_to_object_distances = ObsTerm(
         #     func=mdp.fingertip_to_object_distances,
-        #     params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("object")},
+        #     params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
+        #         )
+        #     }
         # )
 
         # -- command terms
@@ -178,6 +180,7 @@ class ObservationsCfg:
     # NOTE: Keep the default env on the full kinematic observations so the
     # explicit NoVelObs variants remain meaningfully different.
     policy: KinematicObsGroupCfg = KinematicObsGroupCfg()
+    critic: KinematicObsGroupCfg = KinematicObsGroupCfg()
 
 
 @configclass
@@ -298,26 +301,14 @@ class RewardsCfg:
     # NOTE: For Task 4 training, also disable fingertip_to_object_distances in KinematicObsGroupCfg.
 
     # Run 1: always-active spin penalty (comment out for Run 2)
-    object_spin_l2 = RewTerm(
-        func=mdp.object_spin_l2,
-        weight=-1e-2,
-        params={"object_cfg": SceneEntityCfg("object")},
-    )
+    # object_spin_l2 = RewTerm(func=mdp.object_spin_l2, weight=-1e-2, params={"object_cfg": SceneEntityCfg("object")})
 
     # Run 2: near-goal spin penalty (uncomment for Run 2, comment out object_spin_l2 above)
-    # object_spin_near_goal_l2 = RewTerm(
-    #     func=mdp.object_spin_near_goal_l2,
-    #     weight=-1e-2,
-    #     params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2},
-    # )
+    # object_spin_near_goal_l2 = RewTerm(func=mdp.object_spin_near_goal_l2, weight=-1e-2,params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2})
     
     
     # NOTE: Leave this unchanged.
-    # object_away_penalty = RewTerm(
-    #     func=mdp.is_terminated_term,
-    #     weight=-0.0,
-    #     params={"term_keys": "object_out_of_reach"},
-    # )
+    # object_away_penalty = RewTerm(func=mdp.is_terminated_term, weight=-0.0, params={"term_keys": "object_out_of_reach"})
 
 
 @configclass
