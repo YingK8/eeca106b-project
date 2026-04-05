@@ -56,6 +56,8 @@ class TestPolicyNode(Node):
             10        
         )
 
+        # TODO: if error below some threshold, resample goal pos, goal quat
+
         self.get_logger().info("Resetting hand at startup...")
         while self.last_joint_state is None:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -80,10 +82,24 @@ class TestPolicyNode(Node):
         self.get_logger().info(f"Test policy node started ({self.control_rate} Hz).")
     
     def create_policy(self):
-        # TODO: define q_min and q_max from the simulation policy setup before creating the real-world wrapper.
+         # TODO: define q_min and q_max from the simulation policy setup before creating the real-world wrapper.
         # q_min = ...
         # q_max = ...
-        raise NotImplementedError("TODO: define q_min and q_max before creating the policy wrapper")
+        # Joint limits in simulation order (from infer_allegro_repose.py reference script)
+        # Order: index(0-3), middle(4-7), ring(8-11), thumb(12-15) in sim convention
+        q_min = np.array([
+            -0.5585, -0.5585, -0.5585,  0.2792,   # index
+            -0.2792, -0.2792, -0.2792, -0.3316,   # middle
+            -0.2792, -0.2792, -0.2792, -0.2792,   # ring
+            -0.2792, -0.2792, -0.2792, -0.2792,   # thumb
+        ], dtype=np.float32)
+
+        q_max = np.array([
+             0.5585,  0.5585,  0.5585,  1.5707,   # index
+             1.7278,  1.7278,  1.7278,  1.1519,   # middle
+             1.7278,  1.7278,  1.7278,  1.7278,   # ring
+             1.7278,  1.7278,  1.7278,  1.7627,   # thumb
+        ], dtype=np.float32)
 
         policy = RslRlPolicyWrapperRealWorld(
             model_path=self.policy_path,

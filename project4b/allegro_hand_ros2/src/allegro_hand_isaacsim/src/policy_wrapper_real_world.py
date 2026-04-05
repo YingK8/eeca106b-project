@@ -69,7 +69,32 @@ class RslRlPolicyWrapperRealWorld:
         # TODO: implement policy output postprocessing for real hardware.
         # Hint: the policy output is in simulation convention. Before sending commands
         # to the real hand, think through whether simulation and real hardware have different joint order.
-        raise NotImplementedError("TODO: implement real-world postprocessing for policy actions")
+        # Flatten to (16,) regardless of whether model returned (16,) or (1, 16)
+        actions = actions.reshape(16).to(self._device)
+
+        # Step 1: clamp raw policy output to [-1, 1]
+        a = actions.clamp(-1.0, 1.0)
+
+        # Step 2: rescale from [-1, 1] to joint limits
+        # q_des = 0.5 * (a + 1) * (q_max - q_min) + q_min
+        q_des = 0.5 * (a + 1.0) * (self._q_max - self._q_min) + self._q_min
+
+        # Step 3: apply EMA smoothing using previous action (in sim joint order)
+        # q_cmd = alpha * q_des + (1 - alpha) * prev
+        q_cmd = self._alpha * q_des + (1.0 - self._alpha) * self._prev_action
+
+        # Step 4: clamp to joint limits
+        q_cmd = torch.clamp(q_cmd, self._q_min, self._q_max)
+
+        # Step 5: update stored previous action (still in sim order)
+        self._prev_action = q_cmd.clone()
+
+        # Step 6: convert joint order from sim convention to real hardware convention
+        q_cmd_real = sim2real_joints(q_cmd)
+
+        if return_numpy:
+            return q_cmd_real.cpu().numpy()
+        return q_cmd_real
 
     def _as_tensor_value(self, value: np.ndarray | torch.Tensor | float, device: torch.device) -> torch.Tensor:
         if isinstance(value, torch.Tensor):
