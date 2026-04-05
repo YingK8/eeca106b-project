@@ -176,6 +176,90 @@ def quat_unique(q):
     return q if q[0] >= 0 else -q
 
 
+# ---------------------------------------------------------------------------
+# Allegro Hand v4 FK for fingertip-to-object distances
+# Matches mdp.fingertip_to_object_distances (isaaclab preset, right hand).
+# Joint order (sim): index[0-3], middle[4-7], ring[8-11], thumb[12-15].
+# ---------------------------------------------------------------------------
+
+def _quat_to_rotmat_wxyz(wxyz: np.ndarray) -> np.ndarray:
+    w, x, y, z = wxyz
+    return np.array([
+        [1-2*(y*y+z*z),   2*(x*y-w*z),   2*(x*z+w*y)],
+        [  2*(x*y+w*z), 1-2*(x*x+z*z),   2*(y*z-w*x)],
+        [  2*(x*z-w*y),   2*(y*z+w*x), 1-2*(x*x+y*y)],
+    ], dtype=np.float64)
+
+
+def _ry(t: float) -> np.ndarray:
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=np.float64)
+
+
+def _rz(t: float) -> np.ndarray:
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float64)
+
+
+# Hand root pose (isaaclab preset): pos=(0,0,0.5), quat (w,x,y,z)
+_AH_ROOT_R = _quat_to_rotmat_wxyz(np.array([0.257551, 0.283045, 0.683330, -0.621782]))
+_AH_ROOT_P = np.array([0.0, 0.0, 0.5], dtype=np.float64)
+
+# Finger base positions in palm (hand root) frame (metres).
+# Non-thumb: ±19.5 mm lateral, 149.5 mm along palm Z from wrist.
+# Thumb: approximate — adjust if needed after visual inspection.
+_AH_BASES = np.array([
+    [ 0.0,  0.0195, 0.1495],  # index
+    [ 0.0,  0.0000, 0.1495],  # middle
+    [ 0.0, -0.0195, 0.1495],  # ring
+    [-0.05,  0.015, 0.005 ],  # thumb (approximate)
+], dtype=np.float64)
+
+_AH_L = (0.0164, 0.054, 0.0384, 0.0267 + 0.026)  # (L0, L1, L2, L3+tip)
+
+
+def _finger_fk(base: np.ndarray, j: np.ndarray) -> np.ndarray:
+    """FK for one index/middle/ring finger.  J0→Rz (abduction), J1-J3→Ry (flexion)."""
+    L0, L1, L2, L3 = _AH_L
+    R = _rz(j[0])
+    p = base + R @ np.array([0, 0, L0])
+    R = R @ _ry(j[1]); p = p + R @ np.array([0, 0, L1])
+    R = R @ _ry(j[2]); p = p + R @ np.array([0, 0, L2])
+    R = R @ _ry(j[3]); p = p + R @ np.array([0, 0, L3])
+    return p
+
+
+def _thumb_fk(base: np.ndarray, j: np.ndarray) -> np.ndarray:
+    """Simplified FK for the thumb (all joints → Ry)."""
+    L0, L1, L2, L3 = _AH_L
+    R = _ry(j[0])
+    p = base + R @ np.array([0, 0, L0])
+    R = R @ _ry(j[1]); p = p + R @ np.array([0, 0, L1])
+    R = R @ _ry(j[2]); p = p + R @ np.array([0, 0, L2])
+    R = R @ _ry(j[3]); p = p + R @ np.array([0, 0, L3])
+    return p
+
+
+def allegro_fingertip_distances(q_sim: np.ndarray, cube_pos_world: np.ndarray) -> np.ndarray:
+    """Approximate fingertip-to-cube distances matching the sim obs term.
+
+    Returns (4,) float32 array in order [index, middle, ring, thumb].
+
+    Args:
+        q_sim: (16,) joint angles in sim order.
+        cube_pos_world: (3,) cube position in world frame (same as policy's object_pos).
+    """
+    q = np.asarray(q_sim, dtype=np.float64)
+    tips_palm = np.array([
+        _finger_fk(_AH_BASES[0], q[0:4]),
+        _finger_fk(_AH_BASES[1], q[4:8]),
+        _finger_fk(_AH_BASES[2], q[8:12]),
+        _thumb_fk(_AH_BASES[3], q[12:16]),
+    ])
+    tips_world = (_AH_ROOT_R @ tips_palm.T).T + _AH_ROOT_P
+    return np.linalg.norm(tips_world - np.asarray(cube_pos_world, dtype=np.float64), axis=1).astype(np.float32)
+
+
 def generate_goal_pose(
     default_pos=(0.0, -0.19, 0.56),
     init_pos_offset=(0.0, 0.0, -0.04),

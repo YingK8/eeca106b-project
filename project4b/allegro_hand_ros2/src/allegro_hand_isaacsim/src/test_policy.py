@@ -6,7 +6,8 @@ from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped
 import torch
 import numpy as np
-from policy_wrapper_real_world import RslRlPolicyWrapperRealWorld, generate_goal_pose, goal_quat_diff, real2sim_joints
+from policy_wrapper_real_world import (RslRlPolicyWrapperRealWorld, generate_goal_pose, goal_quat_diff,
+                                        real2sim_joints, allegro_fingertip_distances, quat_mul, quat_conjugate)
 
 class TestPolicyNode(Node):
 
@@ -32,6 +33,9 @@ class TestPolicyNode(Node):
         self.last_raw_action = np.zeros(16, dtype=np.float32)
         self.last_cube_pose = None
         self.initialized_buffer = False
+        self._prev_cube_pos = None
+        self._prev_cube_quat = None
+        self._prev_cube_time = None
         self.orientation_success_threshold = self.get_parameter('orientation_success_threshold').value
         self.goal_pos, self.goal_quat = generate_goal_pose()
 
@@ -144,34 +148,82 @@ class TestPolicyNode(Node):
     # Control Loop (30 Hz)
     def control_loop(self):
 
-        if self.last_joint_state is None:
+        if self.last_joint_state is None or self.last_cube_pose is None:
             return
 
-        # Build observation
+        # -- joint positions (sim order) and velocities
         joint_state = np.array(self.last_joint_state.position, dtype=np.float32)
         joint_state = real2sim_joints(joint_state)
+        joint_vel = np.array(self.last_joint_state.velocity, dtype=np.float32)
+        joint_vel = real2sim_joints(joint_vel) * 0.2  # matches sim scale=0.2
+
+        # -- normalize joint positions to [-1, 1] (matches joint_pos_limit_normalized in sim)
+        q_min = self.policy._q_min.cpu().numpy()
+        q_max = self.policy._q_max.cpu().numpy()
+        joint_pos_norm = (2.0 * joint_state - q_min - q_max) / (q_max - q_min)
+
+        # -- object pose (world frame: +0.5 in z to match sim env origin at hand root)
         position = self.last_cube_pose.pose.position
         cube_position = np.array([position.x, position.y, position.z], dtype=np.float32)
-        cube_position[2] += 0.5 # transfer to env frame from hand frame
+        cube_position[2] += 0.5
         orientation = self.last_cube_pose.pose.orientation
         cube_quat = np.array([orientation.w, orientation.x, orientation.y, orientation.z], dtype=np.float32)
+
+        # -- object velocities via finite difference (sim: lin_vel scale=1.0, ang_vel scale=0.2)
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._prev_cube_pos is not None:
+            dt = max(now - self._prev_cube_time, 1e-3)
+            object_lin_vel = (cube_position - self._prev_cube_pos) / dt
+            dq = quat_mul(cube_quat, quat_conjugate(self._prev_cube_quat))
+            w = float(np.clip(abs(dq[0]), 0.0, 1.0))
+            sin_half = np.sqrt(max(0.0, 1.0 - w * w))
+            if sin_half > 1e-7:
+                angle = 2.0 * np.arccos(w)
+                axis = dq[1:] / sin_half
+                if dq[0] < 0:
+                    axis = -axis
+                object_ang_vel = (axis * angle / dt * 0.2).astype(np.float32)
+            else:
+                object_ang_vel = np.zeros(3, dtype=np.float32)
+        else:
+            object_lin_vel = np.zeros(3, dtype=np.float32)
+            object_ang_vel = np.zeros(3, dtype=np.float32)
+        self._prev_cube_pos = cube_position.copy()
+        self._prev_cube_quat = cube_quat.copy()
+        self._prev_cube_time = now
+
+        # -- fingertip-to-object distances (approximate FK, matches sim obs order)
+        fingertip_dists = allegro_fingertip_distances(joint_state, cube_position)
+
+        # -- command / action terms
         goal_pose = np.concatenate([self.goal_pos, self.goal_quat]).copy()
         quat_difference, diff_angle = goal_quat_diff(cube_quat, self.goal_quat)
         last_action = self.last_raw_action
 
         self.get_logger().info(f"{diff_angle}")
 
-
         if diff_angle < self.orientation_success_threshold:
             self.get_logger().info("SUCCESS..SAMPLING NEW GOAL!")
             self.goal_pos, self.goal_quat = generate_goal_pose()
             goal_pose = np.concatenate([self.goal_pos, self.goal_quat]).copy()
             quat_difference, diff_angle = goal_quat_diff(cube_quat, self.goal_quat)
-        
 
-        obs = np.concatenate([joint_state, cube_position, cube_quat, goal_pose, quat_difference, last_action])
-
-        # TODO: if error below some threshold, resample goal pos, goal quat
+        # Concatenate in exactly the same order as KinematicObsGroupCfg (76 dims total):
+        # joint_pos(16) joint_vel(16) object_pos(3) object_quat(4)
+        # object_lin_vel(3) object_ang_vel(3) fingertip_dists(4)
+        # goal_pose(7) goal_quat_diff(4) last_action(16)
+        obs = np.concatenate([
+            joint_pos_norm,    # 16
+            joint_vel,         # 16
+            cube_position,     # 3
+            cube_quat,         # 4
+            object_lin_vel,    # 3
+            object_ang_vel,    # 3
+            fingertip_dists,   # 4
+            goal_pose,         # 7
+            quat_difference,   # 4
+            last_action,       # 16
+        ])  # total: 76
 
         if not self.initialized_buffer:
             self.policy.reset()
@@ -180,8 +232,8 @@ class TestPolicyNode(Node):
 
         with torch.inference_mode():
             raw_action_tensor, q_cmd = self.policy(obs)
-        
-        self.last_raw_action = raw_action_tensor[0].cpu().numpy()
+
+        self.last_raw_action = raw_action_tensor.reshape(16).cpu().numpy()
 
 
         # Publish command
