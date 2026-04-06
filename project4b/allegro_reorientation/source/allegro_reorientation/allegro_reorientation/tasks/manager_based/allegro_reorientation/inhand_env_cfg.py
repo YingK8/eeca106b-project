@@ -136,12 +136,12 @@ class ObservationsCfg:
         )
         # Task 3: fingertip-to-object distances.
         # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
-        # fingertip_to_object_distances = ObsTerm(
-        #     func=mdp.fingertip_to_object_distances,
-        #     params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
-        #         )
-        #     }
-        # )
+        fingertip_to_object_distances = ObsTerm(
+            func=mdp.fingertip_to_object_distances,
+            params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
+                )
+            }
+        )
 
         # -- command terms
         goal_pose = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
@@ -270,11 +270,11 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     # -- task
-    # track_pos_l2 = RewTerm(
-    #     func=mdp.track_pos_l2,
-    #     weight=-10.0,
-    #     params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose"},
-    # )
+    track_pos_l2 = RewTerm(
+        func=mdp.track_pos_l2,
+        weight=-10.0,
+        params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose"},
+    )
     track_orientation_inv_l2 = RewTerm(
         func=mdp.track_orientation_inv_l2,
         weight=1.0,
@@ -287,9 +287,37 @@ class RewardsCfg:
     )
 
     # -- penalties
-    joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-2.5e-5)
+    joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-5e-5)
     action_l2 = RewTerm(func=mdp.action_l2, weight=-0.0001)
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    
+
+    # -- Velocity terms to fix the jitter
+    object_linvel_l2 = RewTerm(
+        func=mdp.object_linvel_l2,
+        weight=-1.0,
+        params={"object_cfg": SceneEntityCfg("object")},
+    )
+
+    object_angvel_l2 = RewTerm(
+        func=mdp.object_angvel_l2,
+        weight=-0.5,
+        params={"object_cfg": SceneEntityCfg("object")},
+    )
+
+    ## reduce the fingertip to hand distance / contact
+    object_to_hand_dist = RewTerm(
+        func=mdp.object_to_hand_dist,
+        weight=-2.0,
+        params={"object_cfg": SceneEntityCfg("object")}
+    )
+
+    # More penalties
+    drop_penalty = RewTerm(
+        func=mdp.object_height_below_threshold,
+        weight=-50.0,
+        params={"threshold": 0.05},
+    )
     
 
     # -- optional penalties (these are disabled by default)
@@ -298,7 +326,8 @@ class RewardsCfg:
     # TODO: add object_spin_near_goal_l2 reward term here.
     # object_spin_near_goal_l2 = ...
     # penalize by 2e-3 because we don't want to overpenalize
-    object_spin_penalty_xz = RewTerm(func=mdp.object_spin_xz_axis_penalty, weight=-2e-3, params={"object_cfg": SceneEntityCfg("object")})
+    
+    #object_spin_penalty_xz = RewTerm(func=mdp.object_spin_xz_axis_penalty, weight=-2e-3, params={"object_cfg": SceneEntityCfg("object")})
 
 @configclass
 class TerminationsCfg:

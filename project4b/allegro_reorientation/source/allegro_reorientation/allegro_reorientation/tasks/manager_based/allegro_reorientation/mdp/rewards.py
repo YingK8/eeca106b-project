@@ -96,6 +96,63 @@ def track_orientation_inv_l2(
 
     return 1.0 / (dtheta + rot_eps)
 
+def object_linvel_l2(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """Penalty for object linear velocity (L2 norm).
+
+    Penalizes translational motion of the object to encourage stable grasping.
+    """
+    asset: RigidObject = env.scene[object_cfg.name]
+    return torch.linalg.norm(asset.data.root_lin_vel_w, dim=-1)
+
+
+def object_angvel_l2(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+    """Penalty for object angular velocity (L2 norm).
+
+    Penalizes rotational motion of the object to discourage uncontrolled spinning.
+    """
+    asset: RigidObject = env.scene[object_cfg.name]
+    return torch.linalg.norm(asset.data.root_ang_vel_w, dim=-1)
+
+
+def object_to_hand_dist(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalty for the distance between the object and the robot hand root.
+
+    Encourages the hand to keep the object close and penalizes dropping.
+    """
+    asset: RigidObject = env.scene[object_cfg.name]
+    robot = env.scene[robot_cfg.name]
+    return torch.linalg.norm(asset.data.root_pos_w - robot.data.root_pos_w, dim=-1)
+
+
+def object_height_below_threshold(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    threshold: float = 0.3,
+) -> torch.Tensor:
+    """Penalty when the object falls below a height threshold.
+
+    Returns 1.0 for each environment where the object z-position (in world frame)
+    has dropped below ``threshold``, and 0.0 otherwise.
+
+    Args:
+        threshold: World-frame z height below which the object is considered dropped.
+                   Default is 0.3 m (well below the hand root at z=0.5).
+    """
+    asset: RigidObject = env.scene[object_cfg.name]
+    return (asset.data.root_pos_w[:, 2] < threshold).float()
+
+
+
 def object_spin_l2(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
