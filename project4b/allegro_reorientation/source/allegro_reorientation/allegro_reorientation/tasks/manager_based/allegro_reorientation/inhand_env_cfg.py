@@ -300,20 +300,6 @@ class RewardsCfg:
     # penalize by 2e-3 because we don't want to overpenalize
     object_spin_penalty_xz = RewTerm(func=mdp.object_spin_xz_axis_penalty, weight=-2e-3, params={"object_cfg": SceneEntityCfg("object")})
 
-    # NOTE: Enable exactly ONE of these two for each training run. Do NOT enable both.
-    # NOTE: For Task 4 training, also disable fingertip_to_object_distances in KinematicObsGroupCfg.
-
-    # Run 1: always-active spin penalty (comment out for Run 2)
-    # object_spin_l2 = RewTerm(func=mdp.object_spin_l2, weight=-1e-2, params={"object_cfg": SceneEntityCfg("object")})
-
-    # Run 2: near-goal spin penalty (uncomment for Run 2, comment out object_spin_l2 above)
-    # object_spin_near_goal_l2 = RewTerm(func=mdp.object_spin_near_goal_l2, weight=-1e-2,params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose", "angle_threshold": 0.2})
-    
-    
-    # NOTE: Leave this unchanged.
-    # object_away_penalty = RewTerm(func=mdp.is_terminated_term, weight=-0.0, params={"term_keys": "object_out_of_reach"})
-
-
 @configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
