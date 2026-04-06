@@ -138,9 +138,7 @@ class ObservationsCfg:
         # NOTE: Disable (comment out) for Task 4 training runs — Task 4 requires the original observation group.
         fingertip_to_object_distances = ObsTerm(
             func=mdp.fingertip_to_object_distances,
-            params={"robot_cfg": SceneEntityCfg("robot", body_names=["index_link_3", "middle_link_3", "ring_link_3", "thumb_link_3"],
-                )
-            }
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("object")},
         )
 
         # -- command terms
@@ -270,11 +268,11 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     # -- task
-    # track_pos_l2 = RewTerm(
-    #     func=mdp.track_pos_l2,
-    #     weight=-10.0,
-    #     params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose"},
-    # )
+    track_pos_l2 = RewTerm(
+        func=mdp.track_pos_l2,
+        weight=-5.0,
+        params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose"},
+    )
     track_orientation_inv_l2 = RewTerm(
         func=mdp.track_orientation_inv_l2,
         weight=1.0,
@@ -287,9 +285,9 @@ class RewardsCfg:
     )
 
     # -- penalties
-    joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-2.5e-5)
+    joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4)  # was -2.5e-5, increased 4x to slow fingers
     action_l2 = RewTerm(func=mdp.action_l2, weight=-0.0001)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.05)  # was -0.01, increased 5x for smoother motions
     
     # -- optional penalties (these are disabled by default)
     # TODO: add object_spin_l2 reward term here.
